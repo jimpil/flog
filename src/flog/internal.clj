@@ -3,7 +3,7 @@
 (defprotocol ILogger
   (getLevel [this])
   (log [this event]
-       [this writer event]))
+       [this writer event])) ;; arity to accommodate `pass-through-writer`
 
 (defn logger? [x]
   (cond->> x

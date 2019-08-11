@@ -19,8 +19,11 @@
 
 
 (defmacro with-logging-context
+  "Merges the current value of *logging-context*
+   with context <c>, and binds it back to *logging-context*."
   [c & body]
-  `(binding [flog.core/*logging-context* ~c]
+  `(binding [flog.core/*logging-context*
+             (merge flog.core/*logging-context* ~c)]
      ~@body))
 ;==========================
 (defn read-config

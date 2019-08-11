@@ -22,6 +22,19 @@ In `flog` loggers are hierarchical - in fact they form an acyclic graph. There i
 
 These can be composed with other loggers to form more meaningful loggers. For instance, logging to std-out is not thread-safe - you probably want some locking  around it. Thankfully, there is a `with-locking` logger (or an `on-agent` one if locking is not how you roll).
 
+Here are some examples: 
+
+- **branching**     (delegates to a set of loggers)
+- **with-locking**  (delegates to a logger after acquiring a lock)
+- **batching**      (buffers events when the lock cannot be acquired and delegates to a logger with the full buffer after acquiring a lock)
+- **batching-file** (the composition of `batching` and `pass-through-writer`)
+- **on-agent**      (delegates to a logger via `send-off`)
+- **executing**     (delegates to a logger via `.submitTask()`)
+- **filtering-levels** (filters events matching the set of levels provided)
+- **formatting-event** (adds a `:formatted` entry to each event - via `clojure.ore/format`)
+- **cl-formatting-event** (adds a `:cl-formatted` entry to each event - via `clojure.pprint/cl-format`)  
+- **rolling-file-size** (delegates to a logger after renaming the provided if it has reached/exceeded a specific size)
+
 ## Logging levels
 All loggers can be associated with a `level`. However, doing that is discouraged as it gives the illusion that a composition of loggers can have a different level at each step. This is true ONLY for the **branching** logger, which wraps a list/set of loggers (as opposed to a single one), and thus allows the forming of graph(s). All other (high-level) loggers wrap a single logger, and therefore form chain(s) (as opposed to graphs). In chains of loggers, only the level of the start node matters. However, you can configure that level on any of the children nodes (including the leaf appender) and let it bubble up. I recommend either the first or the last node, depending on how you like read  the composition. `branching` loggers created manually MUST have an explicit level.
 

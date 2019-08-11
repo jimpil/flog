@@ -187,7 +187,7 @@
 
 ;; BATCHING VARIANTS
 ;; =================
-(defrecord Batching [level out lock pending logger]
+(defrecord Batching [level out lock ^ConcurrentLinkedQueue pending logger]
   ILogger
   (getLevel [_]
     (or (proto/getLevel logger) level)) ;; let levels bubble up
@@ -197,7 +197,7 @@
       (with-open [^Writer wrt (io/writer out :append true)]
         ;; write the entire buffer
         (ut/while-let [e (.poll pending)]
-                      (proto/log logger wrt e))
+          (proto/log logger wrt e))
         (.flush wrt)))))
 
 (defn batching
