@@ -208,7 +208,15 @@
     `(log! :REPORT :f ~args)
     (meta &form)))
 ;;======================================
-(defn init!
+(defn init-with-root!
+  [root]
+  (alter-var-root *root* (constantly root))
+  (tracef "Root logger initialised per profile:%s%s"
+          (str \newline)
+          (meta root))
+  (debug "Flog away..."))
+
+(defn init-with-config!
   ""
   ([]
    (if-let [profiles  (System/getProperty "flogging.profiles")]
@@ -216,7 +224,7 @@
        (-> profiles
            read-config
            (get (keyword profile))
-           init!)
+           init-with-config!)
        (throw
          (IllegalStateException. "`flogging.profile` system-property not set!")))
      (throw
@@ -226,12 +234,7 @@
                     (:level profile levels/TRACE)
                     (:loggers profile))
                   (with-meta profile))]
-     (alter-var-root *root* (constantly root))
-     (tracef "Root logger initialised per profile:%s%s"
-             (str \newline)
-             profile)
-     (debug "Flog away..."))))
-
+     (init-with-root! root))))
 
 (defn enabled-for-ns?
   "Rule per Logback's basic selection rule:
