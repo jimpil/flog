@@ -5,11 +5,15 @@
             [clojure.java.io :as io]
             [clojure.edn :as edn]
             [clojure.string :as str]
-            [flog.util :as ut])
-  (:import (java.io PushbackReader)))
+            [flog.util :as ut]
+            [flog.internal :as proto])
+  (:import (java.io PushbackReader)
+           (flog.internal ILogger)
+           (java.nio.file FileSystems Path)))
 
 (def ^:dynamic *root* nil)
 (def ^:dynamic *logging-context* nil)
+(def ^:dynamic *readers* loggers/edn-readers)
 
 ;;helper macros
 (defmacro with-root-logger
@@ -25,11 +29,21 @@
   `(binding [flog.core/*logging-context*
              (merge flog.core/*logging-context* ~c)]
      ~@body))
+
+(defmacro with-readers
+  "Merges the current value of *readers*
+  with readers <rdrs>, and binds it back to *readers*."
+  [rdrs & body]
+  (binding [flog.core/*readers*
+            (merge flog.core/*readers* ~rdrs)]
+    ~@body))
 ;==========================
 (defn read-config
-  [conf]
-  (with-open [rdr (PushbackReader. (io/reader conf))]
-    (edn/read {:readers loggers/edn-readers} rdr)))
+  ([conf]
+   (read-config conf nil))
+  ([conf readers]
+   (with-open [rdr (PushbackReader. (io/reader conf))]
+     (edn/read {:readers (merge *readers* readers)} rdr))))
 
 (defn- fline [form]
   (:line (meta form)))
@@ -219,36 +233,40 @@
           (meta root))
   (debug "Flog away..."))
 
-(defn init-with-config!
+(let [p (promise)]
+  (defn init-with-config!
   ""
-  ([]
+  ([] ;; arity for unknown config - use `with-readers` if you have custom readers
    (if-let [profiles  (System/getProperty "flogging.profiles")]
      (if-let [profile (System/getProperty "flogging.profile")]
-       (-> profiles
-           read-config
-           (get (keyword profile))
-           init-with-config!)
+       (init-with-config! profiles profile nil)
        (throw
          (IllegalStateException. "`flogging.profile` system-property not set!")))
      (throw
        (IllegalStateException. "`flogging.profiles` system-property not set!"))))
-  ([profile]
-   (let [root (-> (loggers/branching
-                    (:level profile levels/TRACE)
-                    (:loggers profile))
-                  (with-meta profile))]
-     (init-with-root! root))))
+  ([root-logger]
+   (init-with-config! nil root-logger nil)) ;; arity for known logger
+  ([profile extra-readers] ;; arity for known profile w/o custom readers
+   (init-with-config! [nil profile] extra-readers))
+  ([profiles profile* extra-readers]     ;; arity for known config w/ custom readers
+   (let [logger? (internal/logger? profile*)
+         root (if logger? ;; maybe this is useful?
+                (with-meta profile* {:level (proto/getLevel profile*)
+                                    :nss (-> profile* meta :nss)})
+                (let [global-config (read-config profiles extra-readers)
+                      file-watch (:watch? global-config)
+                      profile (get global-config
+                                   (cond-> profile* (string? profile*) keyword))]
+                  (when (and file-watch
+                             (not (realized? p)))
+                    (ut/start-watching-file!
+                      (fn [_]
+                        (deliver p true) ;; marker so we never run this code again
+                        (init-with-config! profiles profile* extra-readers))
+                      (io/file profiles)))
 
-(defn enabled-for-ns?
-  "Rule per Logback's basic selection rule:
-   A log request of level p issued to a logger having
-   an effective level q, is enabled if p >= q."
-  [level ns-str config]
-  (let [min-level (if-let [ns-levels (:nss config)]
-                    (get ns-levels ns-str)
-                    (:level config levels/TRACE))]
-    (level>= (levels/priority level)
-             (levels/priority min-level))))
-
-
-
+                  (-> (loggers/branching
+                        (:level profile levels/TRACE)
+                        (:loggers profile))
+                      (with-meta profile))))]
+     (init-with-root! root)))))

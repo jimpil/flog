@@ -1,6 +1,9 @@
 # flog
-
 A logging library that doesn't flog you! ;)
+
+<p align="center">
+  <img src="http://3.bp.blogspot.com/-Yj_hBxSI9d0/T_iGL3QEapI/AAAAAAAAB_M/3VR0QBjbGDo/s1600/Flogging_whip_810536686.jpg"/>
+</p>
 
 ## Fundamentals
 `flog` was heavily motivated/inspired by [this](https://juxt.pro/blog/posts/logging.html) article. As such, `flog` builds upon a single abstraction - the `ILogger` - pretty much exactly as described in the `Learn from the Java lesson` section of said article. 
@@ -34,6 +37,8 @@ Here are some examples:
 - **formatting-event** (adds a `:formatted` entry to each event - via `clojure.ore/format`)
 - **cl-formatting-event** (adds a `:cl-formatted` entry to each event - via `clojure.pprint/cl-format`)  
 - **rolling-file-size** (delegates to a logger after renaming the provided if it has reached/exceeded a specific size)
+
+All loggers are EDN-serialisable. In other words, you can call `pr-str` on any logger and copy-paste the result straight into your config file.
 
 ## Logging levels
 All loggers can be associated with a `level`. However, doing that is discouraged as it gives the illusion that a composition of loggers can have a different level at each step. This is true ONLY for the **branching** logger, which wraps a list/set of loggers (as opposed to a single one), and thus allows the forming of graph(s). All other (high-level) loggers wrap a single logger, and therefore form chain(s) (as opposed to graphs). In chains of loggers, only the level of the start node matters. However, you can configure that level on any of the children nodes (including the leaf appender) and let it bubble up. I recommend either the first or the last node, depending on how you like read  the composition. `branching` loggers created manually MUST have an explicit level.
@@ -110,7 +115,7 @@ Combining the above with the EDN structure in the previous section gives us a co
 See `example.config` for a more concrete example. 
 
 ## Initialisation 
-There are two cases here. If the root-logger (or its spec), is known at compile-time, use `init-with-root!` or `init-with-config!`. Otherwise, you have to use the no-arg arity of `init-with-config!` which will read two System properties - `flogging.profiles` (path to the file containing all the profile specs) and `flogging.profile` (which profile to choose). 
+There are two cases here. If the root-logger (or its spec), is known at compile-time, use `init-with-root!` or `init-with-config!`. Otherwise, you have to use the no-arg arity of `init-with-config!` which will read two System properties - `flogging.profiles` (path to the file containing all the profile specs) and `flogging.profile` (which profile to choose). If you have custom EDN-readers, you will have to wrap that call in a `with-readers` expression.
 
 It should be noted here, that knowing your root logger (or its spec) at compile time provides significant benefits with respect to performance (more on this later). The trade-off is, of course, that you have to re-compile/re-distribute in order to make a change to it. 
 

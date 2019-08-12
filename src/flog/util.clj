@@ -6,7 +6,7 @@
            (java.net InetAddress)
            (java.time LocalDateTime)
            (java.util.concurrent ExecutorService ThreadFactory Executors)
-           (java.nio.file Files StandardCopyOption)))
+           (java.nio.file Files StandardCopyOption FileSystems WatchService StandardWatchEventKinds WatchKey WatchEvent Path ClosedWatchServiceException)))
 
 (defn env-info
   []
@@ -84,3 +84,28 @@
   (Files/move (.toPath source)
               (.toPath target)
               move-opts))
+
+(defn start-watching-file!
+  [handler ^File f]
+  (let [dir-to-watch (.toPath (.getParentFile f))
+        watcher (.newWatchService (FileSystems/getDefault))]
+    (.register dir-to-watch watcher StandardWatchEventKinds/ENTRY_MODIFY)
+    (future
+      (try
+        (while-let [wk (.take watcher)]
+          (doseq [^WatchEvent e (.pollEvents wk)]
+            (let [kind (.kind e)
+                  path-modified (.context e)]
+              (when (and (= kind StandardWatchEventKinds/ENTRY_MODIFY);; ignore OVERFLOW events
+                         (= (.toPath f) path-modified))
+                (handler path-modified))))
+          (when (false? (.reset wk))
+            ;; directory is inaccessible so abort the loop!
+            (.close watcher)))
+        (catch InterruptedException _ nil)
+        (catch ClosedWatchServiceException _ nil)) ;; what to do here?!
+
+      )
+    )
+
+  )

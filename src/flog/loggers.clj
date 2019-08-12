@@ -194,8 +194,9 @@
   (log [_ event]
     (.offer pending event) ;; always true
     (ut/with-try-lock lock
-      (with-open [^Writer wrt (io/writer out :append true)]
-        ;; write the entire buffer
+      (with-open [wrt (io/writer out :append true)]
+        ;; keep writing from this thread
+        ;; for as long as there are elements
         (ut/while-let [e (.poll pending)]
           (proto/log logger wrt e))
         (.flush wrt)))))
@@ -301,7 +302,7 @@
     (future (proto/xlog logger event))
     nil))
 
-(defrecord PoolExecuting [level pool logger]
+(defrecord PoolExecuting [level ^ExecutorService pool logger]
   ILogger
   (getLevel [_]
     (or (proto/getLevel logger) level)) ;; let levels bubble up
@@ -441,7 +442,7 @@
     n))
 
 (defrecord RollingFileSize
-  [level ^File file suffix limit counter logger]
+  [level ^File file suffix limit ^AtomicLong counter logger]
   ILogger
   (getLevel [_] level)
   (log [_ e]
