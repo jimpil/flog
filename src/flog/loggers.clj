@@ -8,8 +8,8 @@
             [flog.internal :as internal])
   (:import [flog.internal ILogger]
            (java.util.concurrent ConcurrentLinkedQueue ExecutorService TimeUnit Executors)
-           (java.util.concurrent.locks ReentrantLock)
-           (java.io Writer File)
+           (java.util.concurrent.locks ReentrantLock Lock)
+           (java.io Writer File Closeable)
            (java.util.concurrent.atomic AtomicLong)
            (java.time LocalDate LocalTime)
            (java.time.temporal ChronoUnit)
@@ -21,10 +21,13 @@
   (getLevel [_]
     (or (proto/getLevel logger) level)) ;; let levels bubble up
   (log [_ e]
-    (f logger e)))
+    (f logger e))
+  Closeable
+  (close [_]
+    (.close ^Closeable logger)))
 
 (defmethod print-method XLogger [this ^Writer w]
-  (.write w "#flog.internal.XLogger")
+  (.write w "#flog.loggers.XLogger")
   (.write w (pr-str
               (merge (meta this)
                      (select-keys this [:level :logger])))))
@@ -110,16 +113,18 @@
 (defrecord Branching [level loggers]
   ILogger
   (getLevel [_] level)
-  (log [this e]
+  (log [_ e]
     (run!
-      #(and (enabled-for-logger? % level e)
-            (proto/xlog % e))
+      #(when (enabled-for-logger? % level e)
+         (proto/xlog % e))
       loggers))
 
   IFn ;; Branching loggers are `add-tap` friendly
   (invoke [this x]
     (internal/xlog this x))
-  )
+  Closeable
+  (close [_]
+    (run! #(.close ^Closeable %) loggers)))
 
 (defn branching
   "Returns a Logger which delegates to all
@@ -143,7 +148,10 @@
   (getLevel [_]
     (or (proto/getLevel logger) level)) ;; let levels bubble up
   (log [_ e]
-    (ut/with-lock lock (proto/xlog logger e))))
+    (ut/with-lock lock (proto/xlog logger e)))
+  Closeable
+  (close [_]
+    (.close ^Closeable logger)))
 
 (defmethod print-method Locking [this ^Writer w]
   (.write w "#flog.loggers.Locking")
@@ -179,66 +187,71 @@
   ([f]
    (locking-file nil f))
   ([level ^File f]
-   (with-locking level (appenders/with-open-writer level f))))
+   (with-locking level (appenders/pass-through-writer level f))))
 
 (defn map->LockingFile
   [m]
-  (locking-file (:level m) (:file m)))
+  (locking-file (:level m) (io/file (:out m))))
 
 ;; BATCHING VARIANTS
 ;; =================
-(defrecord Batching [level out lock ^ConcurrentLinkedQueue pending logger]
+(defrecord Batching [level ^Lock lock ^ConcurrentLinkedQueue pending logger]
   ILogger
   (getLevel [_]
     (or (proto/getLevel logger) level)) ;; let levels bubble up
   (log [_ event]
     (.offer pending event) ;; always true
     (ut/with-try-lock lock
-      (with-open [wrt (io/writer out :append true)]
-        ;; keep writing from this thread
-        ;; for as long as there are elements
-        (ut/while-let [e (.poll pending)]
-          (proto/log logger wrt e))
-        (.flush wrt)))))
+      ;; keep writing from this thread
+      ;; for as long as there are elements
+      (ut/while-let [e (.poll pending)]
+        (proto/xlog logger e))))
+  Closeable
+  (close [_]
+    (.close ^Closeable logger)))
 
 (defn batching
   "Returns a logger backed by a ConcurrentLinkedQueue.
    Messages are queued and written out in bursts via <logger>,
    which MUST implement the 3-arg arity of ILogger.
    <out> per `io/writer`."
-  ([out logger]
-   (batching (proto/getLevel logger) out logger))
-  ([level out logger]
+  ([logger]
+   (batching (proto/getLevel logger)  logger))
+  ([level logger]
    (levels/ensure-valid-level! level)
    (let [lock    (ReentrantLock.)
          pending (ConcurrentLinkedQueue.)]
-     (Batching. level out lock pending logger))))
+     (Batching. level lock pending logger))))
+
+(defmethod print-method Batching [this ^Writer w]
+  (.write w "#flog.loggers.Batching")
+  (.write w (pr-str (dissoc this :pending :lock))))
 
 (defn map->Batching
   [m]
   (batching (:level m)
-            (:out m)
             (:logger m)))
 
 
 (defn batching-file
   "High-performance & thread-safe file-logger
-   which queues the producers & batches the consumers
-   in order to minimise writer open/close."
+   which queues the producers & batches the consumers,
+   in order to minimise threads in case of high-load.
+   Not a good option for use-cases with high write latency
+   (e.g. network resource)."
   ([f]
    (batching-file nil f))
   ([level ^File f]
-   (batching level f (appenders/pass-through-writer level))))
+   (batching level (appenders/pass-through-writer level f))))
 
 (defn map->BatchingFile
   [m]
-  (batching-file (:level m)
-                 (io/file (:out m))))
+  (batching-file (:level m) (io/file (:out m))))
 
 (defn batching-console ;; not the greatest viewing experience with many threads writing
   [level]
   "A general-purpose console appender based on queueing/batching."
-  (batching *out* (appenders/std-out level)))
+  (batching (appenders/std-out level)))
 
 (defn map->BatchingConsole
   [m]
@@ -250,20 +263,38 @@
   (getLevel [_]
     (or (proto/getLevel logger) level)) ;; let levels bubble up
   (log [_ event]
-    (send-off
-      agent
-      (fn [state]
-        (proto/xlog logger event)
-        (update state :events-written inc')))))
+    (let [[agent send-fn] agent]
+      (send-off agent send-fn event)))
+  Closeable
+  (close [_]
+    (.close ^Closeable logger)))
+
+(defmethod print-method OnAgent [this ^Writer w]
+  (let [agent-vec (:agent this)
+        cb? (some-> agent-vec  first meta :circuit-breaker?)]
+    (.write w (if (true? cb?)
+                "#flog.loggers.OnCBAgent"
+                "#flog.loggers.OnAgent"))
+    (.write w (pr-str (-> this
+                          (dissoc :agent)
+                          (merge (meta agent-vec)))))))
+
+(defn- agent-sender
+  [logger state event]
+  (proto/xlog logger event)
+  (update state :events-written inc'))
 
 (defn on-agent
   "Returns a Logger which delegates to the provided one
-   asynchronously on a separate thread via <agent>."
+   asynchronously on a separate thread via <agent>.
+   A good option for high-latency use-cases."
   ([agent logger]
    (on-agent (proto/getLevel logger) agent logger))
   ([level agent logger]
    (levels/ensure-valid-level! level)
-   (OnAgent. level agent logger)))
+   (OnAgent. level
+             [agent (partial agent-sender logger)]
+             logger)))
 
 (defn map->OnAgent
   [m]
@@ -272,12 +303,41 @@
             (:logger m)))
 
 
+(defn on-cb-agent
+  "Returns a Logger which delegates to the provided one
+   asynchronously on a separate thread via <util/agent-cb>.
+   A good option for high-latency use-cases."
+  ([cb-agent logger]
+   (on-cb-agent (proto/getLevel logger) cb-agent logger))
+  ([level [cb-agent wrap :as cb-vec] logger]
+   (levels/ensure-valid-level! level)
+   (OnAgent. level
+             (update cb-vec 1 #(% (partial agent-sender logger)))
+             logger)))
+
+(defn map->OnCBAgent
+  [m]
+  (let [ks [:fail-limit
+            :fail-interval
+            :success-limit
+            :open-timeout
+            :drop-fn
+            :ex-fn]
+        vs ((apply juxt ks) m)]
+    (on-cb-agent (:level m)
+                 (-> (apply ut/agent-cb
+                            {:events-written 0}
+                            (take 3 vs)
+                            (take-last 3 vs))
+                     (with-meta (zipmap ks vs)))
+                 (:logger m))))
+
 (defn async-file
   ([fp]
    (async-file nil fp))
-  ([level ^String fpath]
+  ([level ^File f]
    (map->OnAgent {:level level
-                  :logger (appenders/with-open-writer level fpath)})))
+                  :logger (appenders/pass-through-writer level f)})))
 
 (defn map->AsyncFile
   [m]
@@ -300,7 +360,10 @@
     (or (proto/getLevel logger) level)) ;; let levels bubble up
   (log [_ event]
     (future (proto/xlog logger event))
-    nil))
+    nil)
+  Closeable
+  (close [_]
+    (.close ^Closeable logger)))
 
 (defrecord PoolExecuting [level ^ExecutorService pool logger]
   ILogger
@@ -309,7 +372,11 @@
   (log [_ event]
     (.submit pool ^Runnable
              (partial proto/xlog logger event))
-    nil))
+    nil)
+  Closeable
+  (close [_]
+    (.shutdown pool)
+    (.close ^Closeable logger)))
 
 (defmethod print-method PoolExecuting [this ^Writer w]
   (.write w "#flog.loggers.PoolExecuting")
@@ -450,7 +517,10 @@
       (let [roll-file (io/file (str file suffix (.incrementAndGet counter)))]
         (ut/move-file! file roll-file)
         (proto/xlog logger e))
-      (proto/xlog logger e))))
+      (proto/xlog logger e)))
+  Closeable
+  (close [_]
+    (.close ^Closeable logger)))
 
 (defmethod print-method RollingFileSize [this ^Writer w]
   (.write w "#flog.loggers.RollingFileSize")
@@ -487,7 +557,10 @@
   ILogger
   (getLevel [_] level)
   (log [_ e]
-    (proto/xlog logger e)))
+    (proto/xlog logger e))
+  Closeable
+  (close [_]
+    (.close ^Closeable logger)))
 
 (defmethod print-method RollingFileInterval [this ^Writer w]
   (.write w "#flog.loggers.RollingFileInterval")
@@ -527,6 +600,40 @@
                          (:interval m)
                          (:logger m)))
 
+(defrecord RateLimited
+  [level rate-limited-fn logger]
+  ILogger
+  (getLevel [_]
+    (or (proto/getLevel logger) level))
+  (log [_ e]
+    (rate-limited-fn logger e))
+  Closeable
+  (close [_]
+    (.close ^Closeable logger)))
+
+(defonce ->time-unit
+  {:mil TimeUnit/MILLISECONDS
+   :sec TimeUnit/SECONDS
+   :min TimeUnit/MINUTES})
+
+(defn rate-limited
+  ([logger]
+   (rate-limited [1 :sec 1] logger))
+  ([rate logger]
+   (rate-limited (proto/getLevel logger) rate logger))
+  ([level rate logger]
+   (RateLimited. level
+                 (ut/rate-limited proto/xlog (update rate 1 ->time-unit))
+                 logger)))
+
+(defn map->RateLimited
+  [m]
+  (rate-limited (:level m)
+                ((juxt :n-calls :time-unit :per)
+                 (:rate m))
+                (:logger m)))
+
+
 (def edn-readers
   {'flog.appenders.StdOut            appenders/map->StdOut
    'logger/StdOut                    appenders/map->StdOut
@@ -534,8 +641,8 @@
    'flog.appenders.PassThroughWriter appenders/map->PassThroughWriter
    'logger/PassThroughWriter         appenders/map->PassThroughWriter
 
-   'flog.appenders.WithOpenWriter    appenders/map->WithOpenWriter
-   'logger/WithOpenWriter            appenders/map->WithOpenWriter
+   ;'flog.appenders.WithOpenWriter    appenders/map->WithOpenWriter
+   ;'logger/WithOpenWriter            appenders/map->WithOpenWriter
 
    'flog.appenders.AtomOut           appenders/map->AtomOut
    'logger/AtomOut                   appenders/map->AtomOut
@@ -546,17 +653,22 @@
    'flog.loggers.Locking             map->Locking
    'logger/Locking                   map->Locking
 
+   'flog.loggers.OnAgent             map->OnAgent
+   'logger/OnAgent                   map->OnAgent
+   'flog.loggers.OnCBAgent           map->OnCBAgent
+   'logger/OnCBAgent                 map->OnCBAgent
+
    'flog.loggers.Batching            map->Batching
    'logger/Batching                  map->Batching
 
+   ;; the following don't need fully qualified reader tags
+   ;; because the loggers rely on lower level constructors
    'logger/BatchingFile              map->BatchingFile
    'logger/BatchingConsole           map->BatchingConsole
    'logger/Executing                 map->Executing
    'logger/LockingConsole            map->LockingConsole
    'logger/AsyncConsole              map->AsyncConsole
    'logger/LockingFile               map->LockingFile
-
-
    'logger/Mapping                   map->Mapping
    'logger/Filtering                 map->Filtering
    'logger/Removing                  map->Removing
@@ -570,7 +682,11 @@
    'flog.loggers.RollingFileSize     map->RollingFileSize
    'logger/RollingFileSize           map->RollingFileSize
 
-   'logger/xlogger                   map->XLogger
+   'flog.loggers./RateLimited        map->RateLimited
+   'logger/RateLimited               map->RateLimited
+
+   'flog.loggers.XLogger             map->XLogger
+   'logger/XLogger                   map->XLogger
    }
 
   )

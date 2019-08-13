@@ -7,7 +7,7 @@
             [clojure.string :as str]
             [flog.util :as ut]
             [flog.internal :as proto])
-  (:import (java.io PushbackReader)
+  (:import (java.io PushbackReader Flushable Closeable)
            (flog.internal ILogger)
            (java.nio.file FileSystems Path)))
 
@@ -233,6 +233,15 @@
           (meta root))
   (debug "Flog away..."))
 
+(defn profile->root
+  [profile]
+  (let [sync? (:sync? profile)]
+    (cond-> (loggers/branching
+              (:level profile levels/TRACE)
+              (:loggers profile))
+            (not sync?) loggers/executing
+            true (with-meta profile))))
+
 (let [p (promise)]
   (defn init-with-config!
   ""
@@ -264,9 +273,12 @@
                         (deliver p true) ;; marker so we never run this code again
                         (init-with-config! profiles profile* extra-readers))
                       (io/file profiles)))
-
-                  (-> (loggers/branching
-                        (:level profile levels/TRACE)
-                        (:loggers profile))
-                      (with-meta profile))))]
+                  (profile->root profile)))]
      (init-with-root! root)))))
+
+(defn stop-flogging!
+  "Flushes and closes the *root* logger (if there is one)."
+  []
+  (trace "Flushing leftovers - No more flogging for you!")
+  (when (some? *root*)
+    (.close ^Closeable *root*)))

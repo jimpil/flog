@@ -3,7 +3,7 @@
             [clojure.java.io :as io]
             [flog.internal :as proto])
   (:import (flog.internal ILogger)
-           (java.io Writer)))
+           (java.io Writer Closeable Flushable)))
 
 (defonce ^String NEWLINE
   (System/getProperty "line.separator"))
@@ -12,19 +12,27 @@
 ;; THE DIFFERENCE IS THAT APPENDERS ACTUALLY WRITE.
 ;; ================================================
 
-(defrecord PassThroughWriter [level]
+(defrecord PassThroughWriter [level ^Writer wrt]
   ILogger
   (getLevel [_] level)
-  (log [_ wrt e]
+  (log [_ e]
     (ut/wr-str wrt e)
-    (.write ^Writer wrt NEWLINE)))
+    (.write wrt NEWLINE))
+  Closeable
+  (close [_]
+    (.flush wrt)
+    (.close wrt)))
 
 (defn pass-through-writer
   "Logger which leaves the writer open."
-  [level]
-  (PassThroughWriter. level))
+  [level out]
+  (PassThroughWriter. level (io/writer out :append true)))
 
-(defrecord WithOpenWriter [level out]
+(defn map->PassThroughWriter
+  [m]
+  (pass-through-writer (:level m) (:out m)))
+
+#_(defrecord WithOpenWriter [level out]
   ILogger
   (getLevel [_] level)
   (log [_ e]
@@ -33,7 +41,7 @@
       (.write wrt NEWLINE)
       (.flush wrt))))
 
-(defn with-open-writer
+#_(defn with-open-writer
   "Logger which closes the writer on each call."
   [level out]
   (WithOpenWriter. level out))
@@ -45,8 +53,9 @@
     (if (string? e)
       (println e)
       (prn e)))
-  (log [this _ e]
-    (proto/log this e)))
+  Closeable
+  (close [_] (flush))) ;; don't close *out*!
+
 
 (defn std-out
   "Logger which writes events to *out*."
@@ -58,7 +67,9 @@
   (getLevel [_] level)
   (log [_ e]
     (swap! out conj e)
-    nil))
+    nil)
+  Closeable
+  (close [_] nil))
 
 (defn in-atom
   "Logger which pours all events into atom <a> (via `conj`).

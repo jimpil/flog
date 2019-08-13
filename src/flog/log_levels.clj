@@ -8,13 +8,15 @@
 (def ^:const REPORT "REPORT")
 (def ^:const FATAL "FATAL")
 
-(def priority
+(defonce priority
   (zipmap [REPORT TRACE  DEBUG  INFO  WARN  ERROR FATAL]
           (range 1 8)))
 
 (defn ensure-valid-level!
   [level]
   (or (nil? level)
-      (assert (contains? priority level)
-              "<level> not recognised...")))
+      (when-not (contains? priority level)
+        (throw
+          (IllegalArgumentException.
+            (format "Invalid level <%s>!" level))))))
 
