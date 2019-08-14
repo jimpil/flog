@@ -185,9 +185,7 @@
   - You can/should NOT set a validator to the returns agent, as it will interfere with the error-handler.
   - Any Watches should be used/crafted with caution. They should be ignorant wrt
     changes in the value internal `::cbs` key. In general, the aforementioned key must be allowed to exist,
-    and under no circumstances be removed.
-  - Tolerances apply (per the async nature of agents). For instance, the transition from
-    OPEN => HALF-OPEN cannot be called 'immediate', as it is not even synchronous."
+    and under no circumstances be removed."
   [init-state [fail-limit fail-interval success-limit] open-timeout drop-fn ex-fn]
   (assert (or (map? init-state)
               (nil? init-state))
@@ -206,14 +204,12 @@
                                      (not= :OPEN (::cbs astate)) ;; someone else has already done this!
                                      (or (zero? previous-fail)   ;; check for interval only when it makes sense
                                          (>= fail-interval (- error-time previous-fail))))
-                            (send-off a
-                                      (fn [curr-state]
-                                        (future ;; transition to HALF-OPEN after <open-timeout> ms
-                                          (Thread/sleep open-timeout)
-                                          (.set success-count 0) ;; don't forget to reset this!
-                                          (send-off a assoc ::cbs :HALF-OPEN))
-                                        ;; in the meantime transition to OPEN
-                                        (assoc curr-state ::cbs :OPEN))))))
+                            (future ;; transition to OPEN immediately
+                                    ;; and to  HALF-OPEN after <open-timeout> ms
+                              (restart-agent a (assoc astate ::cbs :OPEN)
+                              (Thread/sleep open-timeout)
+                              (.set success-count 0) ;; don't forget to reset this!
+                              (restart-agent a (assoc astate ::cbs :HALF-OPEN)))))))
         ag (agent (merge init-state {::cbs :CLOSED})
                   :meta {:circuit-breaker? true} ;; useful meta (see `print-method` for `OnAgent` record)
                   ;; providing an error-handler returns an agent with error-mode => :continue
@@ -244,5 +240,5 @@
                                   ;; but NOT `fail-count`!
                                   (.set last-fail 0)
                                   (throw e))))))]
-
+    (set-error-mode! ag :fail) ;; the agent can't be restarted otherwise
     [ag ag-f]))
