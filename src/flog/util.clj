@@ -160,10 +160,12 @@
 
 
 (defn agent-cb
-  "Returns a vector of two elements `[agent wrapper]`.
+  "Returns a vector of two elements `[agent wrapper cbs-atom]`.
    <agent>    - agent implementing circuit-breaking semantics
                 (see https://docs.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker)
    <wrapper>  - function to call with your send-fn as its argument - returns the correct fn to send to <agent>
+   <cbs-atom> - an atom holding the state the circuit-breaker is currently in. Super useful for debugging/testing.
+                Should only ever be `deref`-ed (NEVER changed)!
 
    Requires the following arguments:
 
@@ -180,47 +182,46 @@
                     Can be used for logging.
 
   Limitations/advice:
-  - Only nil or map initial state is supported.
-  - You can/should NOT change the error-handler, nor the error-mode of the returned agent.
-  - You can/should NOT set a validator to the returns agent, as it will interfere with the error-handler.
-  - Any Watches should be used/crafted with caution. They should be ignorant wrt
-    changes in the value internal `::cbs` key. In general, the aforementioned key must be allowed to exist,
-    and under no circumstances be removed."
+
+  - You can/should NOT change the error-handler, nor the error-mode of the returned agent
+  - You can/should NOT set a validator to the returned agent, as it will interfere with the error-handler
+  - Destructure the returned vector as `[agent cb-wrap]` (i.e. ignore the third element)."
   [init-state [fail-limit fail-interval success-limit] open-timeout drop-fn ex-fn]
-  (assert (or (map? init-state)
-              (nil? init-state))
-          "Only map/nil initial state is supported!")
   (let [fail-count    (AtomicLong. 0)
         last-fail     (AtomicLong. 0)
         success-count (AtomicLong. 0)
-        error-handler (fn cb-error-handler [a ex]
+        CBS           (atom :CLOSED) ;; circuit-breaker initial state
+        time-window-ns (* fail-interval 1000000) ;; we want nanos
+        error-handler (fn cb-error-handler [_a ex]
                         (let [error-time (System/nanoTime)
                               nfails     (.incrementAndGet fail-count)
-                              astate @a
-                              previous-fail (.get last-fail)]
+                              previous-fail (.get last-fail)
+                              within-window? (>= time-window-ns (- error-time previous-fail))]
                           (.set last-fail error-time)
                           (ex-fn ex error-time nfails)
-                          (when (and (>= nfails fail-limit)      ;; over the fail-limit
-                                     (not= :OPEN (::cbs astate)) ;; someone else has already done this!
-                                     (or (zero? previous-fail)   ;; check for interval only when it makes sense
-                                         (>= fail-interval (- error-time previous-fail))))
-                            (future ;; transition to OPEN immediately
-                                    ;; and to  HALF-OPEN after <open-timeout> ms
-                              (restart-agent a (assoc astate ::cbs :OPEN)
+                          (when (and (>= nfails fail-limit)    ;; over the fail-limit
+                                     (not= :OPEN @CBS)         ;; someone else has already done this!
+                                     (or (zero? previous-fail) ;; check for interval only when it makes sense
+                                         within-window?))
+                            ;; transition to OPEN immediately
+                            ;; and to HALF-OPEN after <open-timeout> ms
+                            (reset! CBS :OPEN)
+                            (future
                               (Thread/sleep open-timeout)
                               (.set success-count 0) ;; don't forget to reset this!
-                              (restart-agent a (assoc astate ::cbs :HALF-OPEN)))))))
-        ag (agent (merge init-state {::cbs :CLOSED})
+                              (reset! CBS :HALF-OPEN)))))
+        ag (agent init-state
                   :meta {:circuit-breaker? true} ;; useful meta (see `print-method` for `OnAgent` record)
-                  ;; providing an error-handler returns an agent with error-mode => :continue
+                  ;; providing an error-handler returns an agent with error-mode => :continue (never needs restarting)
                   :error-handler error-handler)
         ag-f (fn cb-send-fn [process]
                (fn [curr-state & args]
-                 (case (::cbs curr-state)
+                 (case @CBS
                    ;; circuit is closed - current flows through
-                   :CLOSED (apply process curr-state args)
+                   :CLOSED (apply process curr-state args) ;; state may change depending on `process`
                    ;; circuit is open - current does not flow through
-                   :OPEN   (apply drop-fn curr-state args)
+                   :OPEN   (do (apply drop-fn curr-state args)
+                               curr-state) ;; state remains unchanged
                    ;; circuit is half-open - try to push some current through
                    :HALF-OPEN (try
                                 (let [ret (apply process curr-state args)] ;; this is the critical call
@@ -231,7 +232,8 @@
                                       ;; reset all state to how they originally were (except success-count obviously)
                                       (.set fail-count 0)
                                       (.set last-fail 0)
-                                      (assoc ret ::cbs :CLOSED))
+                                      (reset! CBS :CLOSED)
+                                      ret)
                                     ret))
                                 (catch Exception e
                                   ;; re-throw the exception after making sure that
@@ -240,5 +242,6 @@
                                   ;; but NOT `fail-count`!
                                   (.set last-fail 0)
                                   (throw e))))))]
-    (set-error-mode! ag :fail) ;; the agent can't be restarted otherwise
-    [ag ag-f]))
+    ;; it is advised to ignore the last element
+    ;; destructure like `[agnt cb-wrap]` for example
+    [ag ag-f CBS]))
