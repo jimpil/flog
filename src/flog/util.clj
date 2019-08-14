@@ -164,7 +164,7 @@
    <agent>    - agent implementing circuit-breaking semantics
                 (see https://docs.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker)
    <wrapper>  - function to call with your send-fn as its argument - returns the correct fn to send to <agent>
-   <cbs-atom> - an atom holding the state the circuit-breaker is currently in. Super useful for debugging/testing.
+   <cbs-atom> - an atom holding the internal state of the circuit-breaker (4 keys). Super useful for debugging/testing.
                 Should only ever be `deref`-ed (NEVER changed)!
 
    Requires the following arguments:
@@ -177,46 +177,50 @@
   <drop-fn>       - Fn to handle all requests while in OPEN state (arg-list per the fn you will wrap with <wrapper>).
                     If a default value makes sense in your domain this is your chance to use it.
                     Can be used for logging.
-  <ex-fn>         - Fn of 3 args to be called against all Exceptions. Takes the Exception itself,
+  <ex-fn>         - Fn of 3 args to be called last in agent's error-handler. Takes the Exception itself,
                     the time it occurred (per `System/nanoTime`) & the current fail count.
                     Can be used for logging.
 
   Limitations/advice:
 
-  - You can/should NOT change the error-handler, nor the error-mode of the returned agent
-  - You can/should NOT set a validator to the returned agent, as it will interfere with the error-handler
-  - Destructure the returned vector as `[agent cb-wrap]` (i.e. ignore the third element)."
+  - You can/should NOT change the error-handler, nor the error-mode of the returned agent.
+  - You can/should NOT set a validator to the returned agent, as it will interfere with the error-handler.
+  - The agent returned already carries some metadata. Make sure they don't get lost if you want to attach your own.
+  - De-structure the returned vector as `[agent cb-wrap]` (i.e. ignore the third element)."
   [init-state [fail-limit fail-interval success-limit] open-timeout drop-fn ex-fn]
-  (let [fail-count    (AtomicLong. 0)
-        last-fail     (AtomicLong. 0)
-        success-count (AtomicLong. 0)
-        CBS           (atom :CLOSED) ;; circuit-breaker initial state
+  (let [CBS (atom {:cbs :CLOSED ;; circuit-breaker initial state
+                   :success-count 0
+                   :fail-count 0
+                   :last-fail 0}) ;; piece of state to allow for fail-interval
         time-window-ns (* fail-interval 1000000) ;; we want nanos
         error-handler (fn cb-error-handler [_a ex]
                         (let [error-time (System/nanoTime)
-                              nfails     (.incrementAndGet fail-count)
-                              previous-fail (.get last-fail)
-                              within-window? (>= time-window-ns (- error-time previous-fail))]
-                          (.set last-fail error-time)
-                          (ex-fn ex error-time nfails)
-                          (when (and (>= nfails fail-limit)    ;; over the fail-limit
-                                     (not= :OPEN @CBS)         ;; someone else has already done this!
-                                     (or (zero? previous-fail) ;; check for interval only when it makes sense
-                                         within-window?))
-                            ;; transition to OPEN immediately
+                              previous-fail (:last-fail @CBS)
+                              {:keys [fail-count cbs]} (swap! CBS #(-> %
+                                                                       (assoc :last-fail error-time)
+                                                                       (update :fail-count inc)))]
+                          (when (and (not= :OPEN cbs)           ;; someone else has already done this!
+                                     (>= fail-count fail-limit) ;; over the fail-limit
+                                     (or (zero? previous-fail)  ;; check for interval only when it makes sense
+                                         (>= time-window-ns (- error-time previous-fail)))) ;; within window?
+                            ;; transition to OPEN immediately,
                             ;; and to HALF-OPEN after <open-timeout> ms
-                            (reset! CBS :OPEN)
+                            (swap! CBS assoc :cbs :OPEN)
                             (future
                               (Thread/sleep open-timeout)
-                              (.set success-count 0) ;; don't forget to reset this!
-                              (reset! CBS :HALF-OPEN)))))
+                              (swap! CBS assoc
+                                     :cbs :HALF-OPEN
+                                     :success-count 0))) ;; don't forget to reset this!
+                          ;; let the caller decide how to handle exceptions
+                          (ex-fn ex error-time fail-count)))
+
         ag (agent init-state
                   :meta {:circuit-breaker? true} ;; useful meta (see `print-method` for `OnAgent` record)
                   ;; providing an error-handler returns an agent with error-mode => :continue (never needs restarting)
                   :error-handler error-handler)
         ag-f (fn cb-send-fn [process]
                (fn [curr-state & args]
-                 (case @CBS
+                 (case (:cbs @CBS)
                    ;; circuit is closed - current flows through
                    :CLOSED (apply process curr-state args) ;; state may change depending on `process`
                    ;; circuit is open - current does not flow through
@@ -224,24 +228,23 @@
                                curr-state) ;; state remains unchanged
                    ;; circuit is half-open - try to push some current through
                    :HALF-OPEN (try
-                                (let [ret (apply process curr-state args)] ;; this is the critical call
-                                  (if (>= (.incrementAndGet success-count)
-                                          success-limit) ;; assume the service was fixed
-                                    (do
+                                (let [ret (apply process curr-state args) ;; this is the critical call
+                                      {:keys [success-count]} (swap! CBS update :success-count inc)]
+                                  (when (>= success-count success-limit) ;; assume the service was fixed
                                       ;; we're about to go back to normal operation (CLOSED state)
                                       ;; reset all state to how they originally were (except success-count obviously)
-                                      (.set fail-count 0)
-                                      (.set last-fail 0)
-                                      (reset! CBS :CLOSED)
-                                      ret)
-                                    ret))
-                                (catch Exception e
+                                      (swap! CBS assoc
+                                             :cbs :CLOSED
+                                             :fail-count 0
+                                             :last-fail 0))
+                                    ret)
+                                (catch Throwable t
                                   ;; re-throw the exception after making sure that
                                   ;; the error-handler will transition the state to OPEN
                                   ;; on the very first attempt. That means resetting `last-fail`
                                   ;; but NOT `fail-count`!
-                                  (.set last-fail 0)
-                                  (throw e))))))]
+                                  (swap! CBS assoc :last-fail 0)
+                                  (throw t))))))]
     ;; it is advised to ignore the last element
     ;; destructure like `[agnt cb-wrap]` for example
     [ag ag-f CBS]))

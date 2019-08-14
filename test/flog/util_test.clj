@@ -16,8 +16,8 @@
           inc-v* (fn [state & args]
                    (update state :v inc))]
       ;; no problems with those 2
-      (send-off a (wrap #(update % :v inc)))
-      (send-off a (wrap #(update % :v dec)))
+      (send-off a (wrap #(update % :v inc))) ;; v = 1
+      (send-off a (wrap #(update % :v dec))) ;; v = 0
       ;; first problem (divide-by-zero)
       (send-off a (wrap (fn [astate & args]
                           (update astate :v #(/ 1 %)))))
@@ -27,21 +27,21 @@
       (send-off a (wrap (fn [astate & args]
                           (update astate :v #(/ 1 %)))))
       ;; now in OPEN state - we'll stay here for 2 seconds
-      ;(Thread/sleep 100)
-      ;(is (= :OPEN @CBS-atom))
+      ;(Thread/sleep 200)
+      ;(is (= :OPEN (:cbs @CBS-atom)))
       (future ;; these three will be dropped
         (send-off a (wrap inc-v*))
         (send-off a (wrap inc-v*))
         (send-off a (wrap inc-v*)))
       (Thread/sleep 2010) ;; this is important
-      ;(is (= :HALF-OPEN @CBS-atom))
+      ;(is (= :HALF-OPEN (:cbs @CBS-atom)))
 
       ;; 3 consecutive successful calls will turn us back to CLOSED
       (send-off a (wrap inc-v*))
       (send-off a (wrap inc-v*))
       (send-off a (wrap inc-v*))
       ;(Thread/sleep 200)
-      ;(is (= :CLOSED @CBS-atom))
+      ;(is (= :CLOSED (:cbs @CBS-atom)))
 
       (is (= 3 (:v @a)))
       (is (every? (partial instance? ArithmeticException) @exceptions))
