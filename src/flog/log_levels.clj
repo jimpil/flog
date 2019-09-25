@@ -20,3 +20,14 @@
           (IllegalArgumentException.
             (format "Invalid level <%s>!" level))))))
 
+(defn enabled-for-ns?
+  "Rule per Logback's basic selection rule:
+   A log request of level p issued to a logger having
+   an effective level q, is enabled if p >= q."
+  [level ns-str config]
+  (let [min-level (if-let [ns-levels (:nss config)]
+                    (get ns-levels ns-str)
+                    (:level config TRACE))]
+    (>= (priority level)
+        (priority min-level))))
+

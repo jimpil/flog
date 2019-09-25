@@ -28,19 +28,6 @@
     (println @total-logs))) ;; more than 2000 logs per second (around 120848 in total)
 
 
-(comment
-  (let [fmt "%-30s %-25s %-25s %-20s [%-5s] %s"
-        f (juxt :issued-at :host :thread  :level :msg)]
-    (stress-test*
-      (flog.core/chaining
-        @(locking-console)
-        (partial removing-levels #{"TRACE"})
-        (partial formatting-event fmt f)
-        (partial mapping :msg))
-      100))
-
-  )
-
 (deftest correct-logging
   (testing "No missing log-events"
     (let [logged-events (atom [])]
@@ -58,7 +45,7 @@
       (is (every?
             (fn [e]
               (every? (partial contains? e)
-                      [:host :issued-at :thread :level :msg :file]))
+                      [:host :timestamp :thread :level :msg :file]))
             @logged-events))
       (is (= n (count @logged-events)))
       )))))

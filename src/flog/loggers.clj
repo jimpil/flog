@@ -1,19 +1,23 @@
 (ns flog.loggers
-  (:require [flog.internal :as proto]
-            [flog.util :as ut]
-            [flog.appenders :as appenders]
+  (:require [flog
+             [internal :as proto]
+             [log-levels :as levels]
+             [appenders :as appenders]
+             [util :as ut]]
             [clojure.java.io :as io]
             [clojure.pprint :refer [cl-format]]
-            [flog.log-levels :as levels]
-            [flog.internal :as internal])
+            [circuit-breaker-fn
+             [core :as cb]
+             [util :as cb-ut]])
   (:import [flog.internal ILogger]
            (java.util.concurrent ConcurrentLinkedQueue ExecutorService TimeUnit Executors)
            (java.util.concurrent.locks ReentrantLock Lock)
            (java.io Writer File Closeable)
            (java.util.concurrent.atomic AtomicLong)
-           (java.time LocalDate LocalTime)
-           (java.time.temporal ChronoUnit)
-           (clojure.lang IFn)))
+           (java.time LocalDate LocalTime ZonedDateTime)
+           (java.time.temporal ChronoUnit IsoFields)
+           (clojure.lang IFn)
+           (java.time.format DateTimeFormatter)))
 
 
 (defrecord XLogger [level f logger]
@@ -22,6 +26,9 @@
     (or (proto/getLevel logger) level)) ;; let levels bubble up
   (log [_ e]
     (f logger e))
+  IFn
+  (invoke [this x]
+    (proto/xlog this x))
   Closeable
   (close [_]
     (.close ^Closeable logger)))
@@ -98,6 +105,48 @@
             (:fn m)
             (:logger m)))
 
+(defrecord Partitioning [level n state logger]
+  ILogger
+  (getLevel [_]
+    (or (proto/getLevel logger) level)) ;; let levels bubble up
+  (log [_ e] ;; can't use the built-in stateful `partition-all` transducer
+    (let [current (swap! state
+                         (fn chunking* [items x]
+                           (let [ret (conj items x)]
+                             (if (> (count ret) n)
+                               (conj (empty items) x)
+                               ret)))
+                         e)]
+      (when (>= (count current) n)
+        ;; partition of n full - proceed with logging
+        ;; logger downstream must be able to handle multiple events
+        (proto/xlog logger current))))
+  IFn
+  (invoke [this x]
+    (proto/xlog this x))
+  Closeable
+  (close [_]
+    (when-let [remaining (not-empty @state)]
+      ;; don't forget to flush!
+      (proto/xlog logger remaining)
+      (swap! state empty))
+    (.close ^Closeable logger)))
+
+(defmethod print-method Partitioning [this ^Writer w]
+  (.write w "#flog.loggers.Partitioning")
+  (.write w (pr-str (select-keys this [:level :n :logger]))))
+
+(defn partitioning
+  ([n logger]
+   (partitioning (proto/getLevel logger) n logger))
+  ([level n logger]
+   (levels/ensure-valid-level! level)
+   (Partitioning. level n (atom []) logger)))
+
+(defn map->Partitioning
+  [level n logger]
+  (partitioning level n logger))
+
 ;; JUNCTION/BRANCHING LOGGER
 ;; =========================
 
@@ -119,9 +168,9 @@
          (proto/xlog % e))
       loggers))
 
-  IFn ;; Branching loggers are `add-tap` friendly
+  IFn
   (invoke [this x]
-    (internal/xlog this x))
+    (proto/xlog this x))
   Closeable
   (close [_]
     (run! #(.close ^Closeable %) loggers)))
@@ -148,7 +197,7 @@
   (getLevel [_]
     (or (proto/getLevel logger) level)) ;; let levels bubble up
   (log [_ e]
-    (ut/with-lock lock (proto/xlog logger e)))
+    (cb-ut/with-lock lock (proto/xlog logger e)))
   Closeable
   (close [_]
     (.close ^Closeable logger)))
@@ -201,11 +250,14 @@
     (or (proto/getLevel logger) level)) ;; let levels bubble up
   (log [_ event]
     (.offer pending event) ;; always true
-    (ut/with-try-lock lock
+    (cb-ut/with-try-lock lock
       ;; keep writing from this thread
       ;; for as long as there are elements
       (ut/while-let [e (.poll pending)]
         (proto/xlog logger e))))
+  IFn
+  (invoke [this x]
+    (proto/xlog this x))
   Closeable
   (close [_]
     (.close ^Closeable logger)))
@@ -265,13 +317,16 @@
   (log [_ event]
     (let [[agent send-fn] agent]
       (send-off agent send-fn event)))
+  IFn
+  (invoke [this x]
+    (proto/xlog this x))
   Closeable
   (close [_]
     (.close ^Closeable logger)))
 
 (defmethod print-method OnAgent [this ^Writer w]
   (let [agent-vec (:agent this)
-        cb? (some-> agent-vec  first meta :circuit-breaker?)]
+        cb? (some-> agent-vec  first meta :circuit-breaker-fn.core/cb?)]
     (.write w (if (true? cb?)
                 "#flog.loggers.OnCBAgent"
                 "#flog.loggers.OnAgent"))
@@ -282,7 +337,8 @@
 (defn- agent-sender
   [logger state event]
   (proto/xlog logger event)
-  (update state :events-written inc'))
+  (when (map? state)
+    (update state :events-written inc')))
 
 (defn on-agent
   "Returns a Logger which delegates to the provided one
@@ -309,7 +365,7 @@
    A good option for high-latency use-cases."
   ([cb-agent logger]
    (on-cb-agent (proto/getLevel logger) cb-agent logger))
-  ([level [cb-agent wrap :as cb-vec] logger]
+  ([level [cb-agent wrap _ :as cb-vec] logger]
    (levels/ensure-valid-level! level)
    (OnAgent. level
              (update cb-vec 1 #(% (partial agent-sender logger)))
@@ -317,19 +373,25 @@
 
 (defn map->OnCBAgent
   [m]
-  (let [ks [:fail-limit
-            :fail-interval
-            :success-limit
-            :open-timeout
-            :drop-fn
-            :ex-fn]
-        vs ((apply juxt ks) m)]
+  (let [cb-ks [:fail-limit
+               :fail-window
+               :fail-window-unit
+               :success-limit
+               :open-timeout
+               :timeout-unit
+               :success-block
+               :drop-fn
+               :ex-fn]
+        cb-params* (select-keys m cb-ks)
+        cb-params (cond-> cb-params*
+                          (:ex-fn cb-params*)
+                          (update :ex-fn   ut/symbol->obj)
+
+                          (:drop-fn cb-params*)
+                          (update :drop-fn ut/symbol->obj))]
     (on-cb-agent (:level m)
-                 (-> (apply ut/agent-cb
-                            {:events-written 0}
-                            (take 3 vs)
-                            (take-last 3 vs))
-                     (with-meta (zipmap ks vs)))
+                 (cb/cb-agent* {:events-written 0}
+                               (assoc cb-params :meta cb-params*))
                  (:logger m))))
 
 (defn async-file
@@ -361,6 +423,9 @@
   (log [_ event]
     (future (proto/xlog logger event))
     nil)
+  IFn
+  (invoke [this x]
+    (proto/xlog this x))
   Closeable
   (close [_]
     (.close ^Closeable logger)))
@@ -373,6 +438,9 @@
     (.submit pool ^Runnable
              (partial proto/xlog logger event))
     nil)
+  IFn
+  (invoke [this x]
+    (proto/xlog this x))
   Closeable
   (close [_]
     (.shutdown pool)
@@ -514,10 +582,14 @@
   (getLevel [_] level)
   (log [_ e]
     (if (>= (.length file) limit)
-      (let [roll-file (io/file (str file suffix (.incrementAndGet counter)))]
-        (ut/move-file! file roll-file)
+      (let [fpath (.getPath file)
+            roll-file (str fpath suffix (.incrementAndGet counter))]
+        (ut/move-file! fpath roll-file)
         (proto/xlog logger e))
       (proto/xlog logger e)))
+  IFn
+  (invoke [this x]
+    (proto/xlog this x))
   Closeable
   (close [_]
     (.close ^Closeable logger)))
@@ -545,149 +617,75 @@
                       (:unit m)]
                      (:logger m)))
 
-(defn- backup-with-date
-  [f]
-  (let [date (LocalDate/now)
-        suffix (str \. date)
-        roll-file (str f suffix)]
-    (ut/move-file! f roll-file)))
-
 (defrecord RollingFileInterval
-  [level file interval logger]
+  [level interval-fn previous-call logger]
   ILogger
-  (getLevel [_] level)
+  (getLevel [_] (or (proto/getLevel logger) level))
   (log [_ e]
-    (proto/xlog logger e))
+    (let [event-timestamp (-> e :timestamp :local)
+          snap @previous-call ;; nil the very first time
+          last-time (or snap (reset! previous-call event-timestamp))
+          last-time-dt (ZonedDateTime/parse last-time)]
+      (when snap ;; don't bother the first time
+        (interval-fn last-time-dt (ZonedDateTime/parse event-timestamp))
+        (reset! last-time event-timestamp))
+      (proto/xlog logger e) ;; good to log now
+      nil))
+  IFn
+  (invoke [this x]
+    (proto/xlog this x))
   Closeable
   (close [_]
     (.close ^Closeable logger)))
 
 (defmethod print-method RollingFileInterval [this ^Writer w]
   (.write w "#flog.loggers.RollingFileInterval")
-  (.write w (pr-str (update this :file str))))
+  (.write w (pr-str
+              (merge (dissoc this :interval-fn :previous-call :logger)
+                     (meta this)))))
 
 (defn rolling-file-interval
-  ([f policy logger]
-   (rolling-file-interval (proto/getLevel logger) f policy logger))
-  ([level f policy logger]
+  [level file policy]
    (levels/ensure-valid-level! level)
-   (let [date (LocalDate/now)
-         suffix (str \. date)
-         now (LocalTime/now)
-         [ms-until-roll interval ^TimeUnit unit]
+   (let [interval-fn
          (case policy
-           :daily  [(.until now (.atTime date 23 59 59) ChronoUnit/MILLIS)
-                    24 TimeUnit/HOURS]
-           :hourly [(.until now (.plus now 1 ChronoUnit/HOURS) ChronoUnit/MILLIS)
-                    1 TimeUnit/HOURS]
-           )]
-     (future
-       (Thread/sleep ms-until-roll)
-       (let [roll-file (io/file (str f suffix))]
-         (ut/move-file! f roll-file)
-         (.scheduleAtFixedRate ;; dedicated thread for backing up the file
-           (Executors/newSingleThreadScheduledExecutor)
-           (partial backup-with-date f)
-           0
-           interval
-           unit)))
-     (RollingFileInterval. level (str f) policy logger))))
+           :daily (fn [last-time-dt now-time-dt]
+                    (let [previous-day (.getDayOfMonth last-time-dt)
+                          current-day (.getDayOfMonth now-time-dt)]
+                      (when (> current-day previous-day)
+                        (let [date (.format now-time-dt DateTimeFormatter/ISO_LOCAL_DATE)
+                              suffix (str \. date)
+                              roll-file (str file suffix)]
+                          (ut/move-file! file roll-file)))))
+           :weekly (fn [last-time-dt now-time-dt]
+                     (let [previous-week (.get last-time-dt IsoFields/WEEK_OF_WEEK_BASED_YEAR)
+                           current-week (.get now-time-dt IsoFields/WEEK_OF_WEEK_BASED_YEAR)]
+                       (when (> current-week previous-week)
+                         (let [date (.format now-time-dt DateTimeFormatter/ISO_WEEK_DATE) ;; 2012-W48-6
+                               suffix (str \. date)
+                               roll-file (str file suffix)]
+                           (ut/move-file! file roll-file)))))
+           :hourly (fn [last-time-dt now-time-dt]
+                     (let [previous-hour (.getHour last-time-dt)
+                           current-hour (.getHour now-time-dt)]
+                       (when (> current-hour previous-hour)
+                         (let [date (.format now-time-dt DateTimeFormatter/ISO_LOCAL_DATE_TIME)
+                               suffix (str \. date)
+                               roll-file (str file suffix)]
+                           (ut/move-file! file roll-file))))))]
+     (with-meta
+       (RollingFileInterval. level
+                             interval-fn
+                             (atom nil)
+                             (appenders/pass-through-writer level file))
+       {:file file
+        :interval policy})))
 
 (defn map->RollingFileInterval
   [m]
   (rolling-file-interval (:level m)
-                         (io/file (:file m))
-                         (:interval m)
-                         (:logger m)))
-
-(defrecord RateLimited
-  [level rate-limited-fn logger]
-  ILogger
-  (getLevel [_]
-    (or (proto/getLevel logger) level))
-  (log [_ e]
-    (rate-limited-fn logger e))
-  Closeable
-  (close [_]
-    (.close ^Closeable logger)))
-
-(defonce ->time-unit
-  {:mil TimeUnit/MILLISECONDS
-   :sec TimeUnit/SECONDS
-   :min TimeUnit/MINUTES})
-
-(defn rate-limited
-  ([logger]
-   (rate-limited [1 :sec 1] logger))
-  ([rate logger]
-   (rate-limited (proto/getLevel logger) rate logger))
-  ([level rate logger]
-   (RateLimited. level
-                 (ut/rate-limited proto/xlog (update rate 1 ->time-unit))
-                 logger)))
-
-(defn map->RateLimited
-  [m]
-  (rate-limited (:level m)
-                ((juxt :n-calls :time-unit :per)
-                 (:rate m))
-                (:logger m)))
+                         (:file m)
+                         (:interval m)))
 
 
-(def edn-readers
-  {'flog.appenders.StdOut            appenders/map->StdOut
-   'logger/StdOut                    appenders/map->StdOut
-
-   'flog.appenders.PassThroughWriter appenders/map->PassThroughWriter
-   'logger/PassThroughWriter         appenders/map->PassThroughWriter
-
-   ;'flog.appenders.WithOpenWriter    appenders/map->WithOpenWriter
-   ;'logger/WithOpenWriter            appenders/map->WithOpenWriter
-
-   'flog.appenders.AtomOut           appenders/map->AtomOut
-   'logger/AtomOut                   appenders/map->AtomOut
-
-   'flog.loggers.Branching           map->Branching
-   'logger/Branching                 map->Branching
-
-   'flog.loggers.Locking             map->Locking
-   'logger/Locking                   map->Locking
-
-   'flog.loggers.OnAgent             map->OnAgent
-   'logger/OnAgent                   map->OnAgent
-   'flog.loggers.OnCBAgent           map->OnCBAgent
-   'logger/OnCBAgent                 map->OnCBAgent
-
-   'flog.loggers.Batching            map->Batching
-   'logger/Batching                  map->Batching
-
-   ;; the following don't need fully qualified reader tags
-   ;; because the loggers rely on lower level constructors
-   'logger/BatchingFile              map->BatchingFile
-   'logger/BatchingConsole           map->BatchingConsole
-   'logger/Executing                 map->Executing
-   'logger/LockingConsole            map->LockingConsole
-   'logger/AsyncConsole              map->AsyncConsole
-   'logger/LockingFile               map->LockingFile
-   'logger/Mapping                   map->Mapping
-   'logger/Filtering                 map->Filtering
-   'logger/Removing                  map->Removing
-   'logger/FilteringLevels           map->FilteringLevels
-   'logger/RemovingLevels            map->RemovingLevels
-   'logger/FormattingEvent           map->FormattingEvent
-   'logger/CLformattingEvent         map->CLformattingEvent
-
-   'flog.loggers.RollingFileInterval map->RollingFileInterval
-   'logger/RollingFileInterval       map->RollingFileInterval
-   'flog.loggers.RollingFileSize     map->RollingFileSize
-   'logger/RollingFileSize           map->RollingFileSize
-
-   'flog.loggers./RateLimited        map->RateLimited
-   'logger/RateLimited               map->RateLimited
-
-   'flog.loggers.XLogger             map->XLogger
-   'logger/XLogger                   map->XLogger
-   }
-
-  )
 
