@@ -7,7 +7,8 @@
   (:import (flog.internal ILogger)
            (java.io Writer Closeable)
            (java.net URI)
-           (clojure.lang IFn)))
+           (clojure.lang IFn)
+           (java.time Instant)))
 
 (defonce ^String NEWLINE
   (System/getProperty "line.separator"))
@@ -47,6 +48,36 @@
 (defn map->PassThroughWriter
   [m]
   (pass-through-writer (:level m) (:out m)))
+
+(defrecord DynamicWriter [level out get-writer]
+  ILogger
+  (getLevel [_] level)
+  (log [_ e]
+    (let [^Writer wrt (get-writer e)]
+      (ut/wr-str wrt e)
+      (.write wrt NEWLINE)
+      (.flush wrt))) ;; flush each time
+  IFn
+  (invoke [this x]
+    (proto/xlog this x))
+  Closeable
+  (close [_]
+    (when-let [wrt (get-writer nil)]
+      (.close ^Writer wrt))))
+
+(defmethod print-method DynamicWriter [this ^Writer w]
+  (.write w "#flog.appenders.DynamicWriter")
+  (.write w (pr-str (merge (select-keys this [:level :out])
+                           (meta this)))))
+
+(defn dynamic-writer
+  [level out get-writer]
+  (with-meta
+    (DynamicWriter. level
+                    out
+                    (cond-> get-writer
+                            (symbol? get-writer) ut/symbol->obj))
+    {:get-writer get-writer}))
 
 (defrecord StdOut [level]
   ILogger

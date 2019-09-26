@@ -6,7 +6,8 @@
            (java.util.concurrent ExecutorService ThreadFactory Executors TimeUnit)
            (java.nio.file Files StandardCopyOption FileSystems WatchService StandardWatchEventKinds WatchKey WatchEvent Path ClosedWatchServiceException Paths)
            (java.util.concurrent.atomic AtomicLong)
-           (java.util ResourceBundle UUID)))
+           (java.util ResourceBundle UUID)
+           (java.nio.file.attribute FileAttribute)))
 
 (defonce ^ZoneId  utc-tz
   (ZoneId/of "Z")) ;; shorthand for UTC
@@ -95,11 +96,15 @@
 (defonce #^"[Ljava.lang.String;" empty-string-array
   (make-array String 0))
 
-(defn move-file!
+(defonce #^"[Ljava.nio.file.attribute.FileAttribute;" empty-fattrs
+  (make-array FileAttribute 0))
+
+(defn backup-file!
   [^String source ^String target]
-  (Files/move (Paths/get source empty-string-array)
-              (Paths/get target empty-string-array)
-              move-opts))
+  (let [source-path (Paths/get source empty-string-array)
+        target-path (Paths/get target empty-string-array)]
+    (Files/move source-path target-path move-opts)
+    (Files/createFile source-path empty-fattrs)))
 
 (defn start-watching-file!
   [handler ^File f]

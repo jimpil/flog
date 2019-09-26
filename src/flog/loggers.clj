@@ -17,7 +17,9 @@
            (java.time LocalDate LocalTime ZonedDateTime)
            (java.time.temporal ChronoUnit IsoFields)
            (clojure.lang IFn)
-           (java.time.format DateTimeFormatter)))
+           (java.time.format DateTimeFormatter)
+           (java.nio.file Files Paths)
+           (java.nio.file.attribute FileAttribute)))
 
 
 (defrecord XLogger [level f logger]
@@ -548,45 +550,22 @@
                     (apply juxt (:juxt-keys m))
                     (:logger m)))
 
-(comment
-
-  (let [fmt "%-30s %-25s %-25s %-20s [%-5s] %s"
-        ks [:issued-at :host :thread :origin :level :msg]
-        error-logger (->> @(locking-console) ;; looks in-reverse like `comp`
-                        (mapping :formatted)
-                        (formatting-event fmt ks)
-                        (filtering-levels #{"ERROR"}))
-        info-logger (flog.core/chaining
-                      @(locking-console)
-                      (partial filtering-levels #{"INFO"})
-                      (partial formatting-event fmt ks)
-                      (partial mapping :formatted))
-        ]
-
-    (flog.core/info error-logger "batch-processor" "Hello world2"))
-
-  )
-
+(defonce ^:dynamic *KB-SIZE* 1024)
 (defn- nbytes
   [n unit]
   (case unit
-    :KB (* n 1024)
-    :MB (nbytes (* n 1000) :KB)
-    :GB (nbytes (* n 1000) :MB)
-    :TB (nbytes (* n 1000) :GB)
+    :KB (* n *KB-SIZE*)
+    :MB (nbytes (* n *KB-SIZE*) :KB)
+    :GB (nbytes (* n *KB-SIZE*) :MB)
+    :TB (nbytes (* n *KB-SIZE*) :GB)
     n))
 
 (defrecord RollingFileSize
-  [level ^File file suffix limit ^AtomicLong counter logger]
+  [level logger]
   ILogger
   (getLevel [_] level)
   (log [_ e]
-    (if (>= (.length file) limit)
-      (let [fpath (.getPath file)
-            roll-file (str fpath suffix (.incrementAndGet counter))]
-        (ut/move-file! fpath roll-file)
-        (proto/xlog logger e))
-      (proto/xlog logger e)))
+    (proto/xlog logger e))
   IFn
   (invoke [this x]
     (proto/xlog this x))
@@ -596,41 +575,48 @@
 
 (defmethod print-method RollingFileSize [this ^Writer w]
   (.write w "#flog.loggers.RollingFileSize")
-  (.write w (pr-str (-> this
-                        (dissoc :counter)
-                        (update :file str)))))
+  (.write w (pr-str
+              (merge (dissoc this :logger)
+                     (meta this)))))
+
+(defn- refresh-writer
+  [^Writer w1 f]
+  (.close w1)
+  (io/writer f :append true))
 
 (defn rolling-file-size
-  ([f max-size logger]
-   (rolling-file-size (proto/getLevel logger) f max-size logger))
-  ([level f [limit unit] logger]
+  ([level f [limit unit]]
    (levels/ensure-valid-level! level)
    (let [counter (AtomicLong. 0)
-         suffix ".backup"]
-     (RollingFileSize. level f suffix (nbytes limit unit) counter logger))))
+         ffile (io/file f)
+         suffix ".backup"
+         byte-limit (nbytes limit unit)
+         current-writer (atom (io/writer ffile :append true))
+         size-fn (fn [_] ; ;the event is not needed here
+                   (if (>= (.length ffile) byte-limit)
+                     (let [roll-file (str f suffix (.incrementAndGet counter))]
+                       (ut/backup-file! f roll-file)
+                       (swap! current-writer refresh-writer ffile))
+                     @current-writer))]
+     (with-meta
+       (RollingFileSize. level (appenders/dynamic-writer level f size-fn))
+       {:file f
+        :limit limit
+        :unit unit}))))
 
 (defn map->RollingFileSize
   [m]
   (rolling-file-size (:level m)
-                     (io/file (:file m))
+                     (:file m)
                      [(:limit m)
-                      (:unit m)]
-                     (:logger m)))
+                      (:unit m)]))
 
 (defrecord RollingFileInterval
-  [level interval-fn previous-call logger]
+  [level logger]
   ILogger
-  (getLevel [_] (or (proto/getLevel logger) level))
+  (getLevel [_] level)
   (log [_ e]
-    (let [event-timestamp (-> e :timestamp :local)
-          snap @previous-call ;; nil the very first time
-          last-time (or snap (reset! previous-call event-timestamp))
-          last-time-dt (ZonedDateTime/parse last-time)]
-      (when snap ;; don't bother the first time
-        (interval-fn last-time-dt (ZonedDateTime/parse event-timestamp))
-        (reset! last-time event-timestamp))
-      (proto/xlog logger e) ;; good to log now
-      nil))
+    (proto/xlog logger e))
   IFn
   (invoke [this x]
     (proto/xlog this x))
@@ -641,43 +627,96 @@
 (defmethod print-method RollingFileInterval [this ^Writer w]
   (.write w "#flog.loggers.RollingFileInterval")
   (.write w (pr-str
-              (merge (dissoc this :interval-fn :previous-call :logger)
+              (merge (dissoc this :logger)
                      (meta this)))))
+
+(defn- time-diff
+  [previous-call event]
+  (let [event-timestamp (-> event :timestamp :local)
+        [last-time now-time] (reset-vals! previous-call event-timestamp)
+        now-time-dt  (ZonedDateTime/parse now-time)
+        last-time-dt (if (nil? last-time)
+                       now-time-dt
+                       (ZonedDateTime/parse last-time))]
+    [last-time-dt now-time-dt]))
 
 (defn rolling-file-interval
   [level file policy]
    (levels/ensure-valid-level! level)
-   (let [interval-fn
+   (let [current-writer (atom (io/writer file :append true))
+         previous-call (atom nil)
+         interval-fn
          (case policy
-           :daily (fn [last-time-dt now-time-dt]
-                    (let [previous-day (.getDayOfMonth last-time-dt)
-                          current-day (.getDayOfMonth now-time-dt)]
-                      (when (> current-day previous-day)
-                        (let [date (.format now-time-dt DateTimeFormatter/ISO_LOCAL_DATE)
-                              suffix (str \. date)
-                              roll-file (str file suffix)]
-                          (ut/move-file! file roll-file)))))
-           :weekly (fn [last-time-dt now-time-dt]
-                     (let [previous-week (.get last-time-dt IsoFields/WEEK_OF_WEEK_BASED_YEAR)
-                           current-week (.get now-time-dt IsoFields/WEEK_OF_WEEK_BASED_YEAR)]
-                       (when (> current-week previous-week)
-                         (let [date (.format now-time-dt DateTimeFormatter/ISO_WEEK_DATE) ;; 2012-W48-6
-                               suffix (str \. date)
-                               roll-file (str file suffix)]
-                           (ut/move-file! file roll-file)))))
-           :hourly (fn [last-time-dt now-time-dt]
-                     (let [previous-hour (.getHour last-time-dt)
-                           current-hour (.getHour now-time-dt)]
-                       (when (> current-hour previous-hour)
-                         (let [date (.format now-time-dt DateTimeFormatter/ISO_LOCAL_DATE_TIME)
-                               suffix (str \. date)
-                               roll-file (str file suffix)]
-                           (ut/move-file! file roll-file))))))]
+           :daily (fn [event]
+                    (if (some? event) ;; flushing
+                      (let [[last-time-dt now-time-dt] (time-diff previous-call event)
+                            previous-day  (.getDayOfYear last-time-dt)
+                            current-day   (.getDayOfYear now-time-dt)
+                            previous-year (.getYear last-time-dt)
+                            current-year  (.getYear now-time-dt)]
+                        (if (or (> current-day previous-day)
+                                (> current-year previous-year))
+                          (let [date (.format now-time-dt DateTimeFormatter/ISO_LOCAL_DATE)
+                                suffix (str \. date)
+                                roll-file (str file suffix)]
+                            (ut/backup-file! file roll-file)
+                            ;; new writer pointing to original file
+                            (swap! current-writer refresh-writer file))
+                          @current-writer))
+                      @current-writer))
+           :monthly (fn [event]
+                      (if (some? event) ;; flushing
+                        (let [[last-time-dt now-time-dt] (time-diff previous-call event)
+                              previous-month (.getMonth last-time-dt)
+                              current-month  (.getMonth now-time-dt)]
+                          (if (or (> current-month previous-month)
+                                  (> (.getYear now-time-dt)
+                                     (.getYear last-time-dt)))
+                            (let [date (.format now-time-dt DateTimeFormatter/ISO_LOCAL_DATE)
+                                  suffix (str \. date)
+                                  roll-file (str file suffix)]
+                              (ut/backup-file! file roll-file)
+                              ;; new writer pointing to original file
+                              (swap! current-writer refresh-writer file))
+                            @current-writer))
+                        @current-writer))
+           :weekly (fn [event]
+                     (if (some? event)
+                       (let [[last-time-dt now-time-dt] (time-diff previous-call event)
+                             previous-week (.get last-time-dt IsoFields/WEEK_OF_WEEK_BASED_YEAR)
+                             current-week  (.get now-time-dt IsoFields/WEEK_OF_WEEK_BASED_YEAR)]
+                         (if (or (> current-week previous-week)
+                                 (> (.getYear now-time-dt)
+                                    (.getYear last-time-dt)))
+                           (let [date (.format now-time-dt DateTimeFormatter/ISO_WEEK_DATE) ;; 2012-W48-6
+                                 suffix (str \. date)
+                                 roll-file (str file suffix)]
+                             (ut/backup-file! file roll-file)
+                             ;; new writer pointing to original file
+                             (swap! current-writer refresh-writer file))
+                           @current-writer))
+                       @current-writer))
+           :hourly (fn [event]
+                     (if (some? event)
+                       (let [[last-time-dt now-time-dt] (time-diff previous-call event)
+                             previous-hour (.getHour last-time-dt)
+                             current-hour  (.getHour now-time-dt)]
+                         (if (or (> current-hour previous-hour)
+                                 (> (.getDayOfYear now-time-dt)
+                                    (.getDayOfYear last-time-dt))
+                                 (> (.getYear now-time-dt)
+                                    (.getYear last-time-dt)))
+                           (let [date (.format now-time-dt DateTimeFormatter/ISO_LOCAL_DATE_TIME)
+                                 suffix (str \. date)
+                                 roll-file (str file suffix)]
+                             (ut/backup-file! file roll-file)
+                             ;; new writer pointing to original file
+                             (swap! current-writer refresh-writer file))
+                           @current-writer))
+                       @current-writer)))]
+     (appenders/dynamic-writer level file interval-fn)
      (with-meta
-       (RollingFileInterval. level
-                             interval-fn
-                             (atom nil)
-                             (appenders/pass-through-writer level file))
+       (RollingFileInterval. level (appenders/dynamic-writer level file interval-fn))
        {:file file
         :interval policy})))
 
