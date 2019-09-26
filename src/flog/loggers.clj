@@ -550,7 +550,7 @@
                     (apply juxt (:juxt-keys m))
                     (:logger m)))
 
-(defonce ^:dynamic *KB-SIZE* 1024)
+(def ^:dynamic *KB-SIZE* 1024)
 (defn- nbytes
   [n unit]
   (case unit
