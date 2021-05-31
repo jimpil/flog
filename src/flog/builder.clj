@@ -3,7 +3,7 @@
   (:import (org.apache.logging.log4j LogBuilder Level)
            (org.apache.logging.log4j.core Logger LoggerContext)))
 
-(defn log-builder*
+(defn at-level
   ^LogBuilder [^Logger logger ^Level level]
   (.atLevel logger level))
 
@@ -15,9 +15,9 @@
   ^Logger [^LoggerContext context ^String logger-ns]
   (.getLogger context logger-ns))
 
-(defmacro ns-logger* [ns]
-  `(-> (ctx/manager-context)
-       (context-logger ~(str ns))))
+(defn ns-logger* [ns]
+  (-> (ctx/manager-context)
+      (context-logger (str ns))))
 
 (defmacro location-info? []
   `(or
@@ -33,10 +33,10 @@
   ([level location?]
    (if (true? location?)
      `(-> (ns-logger* ~*ns*)
-          (log-builder* ~level)
+          (at-level ~level)
           (.withLocation))
      `(-> (ns-logger* ~*ns*)
-          (log-builder* ~level)))))
+          (at-level ~level)))))
 
 (defmacro fatal [] `(log-builder Level/FATAL))
 (defmacro error [] `(log-builder Level/ERROR))
