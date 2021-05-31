@@ -7,7 +7,7 @@
 
  (defprotocol ILogData
    (log* [this builder]
-     [this builder args]))
+         [this builder args]))
 
  (extend-protocol ILogData
    IPersistentMap
