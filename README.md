@@ -83,9 +83,12 @@ The standard `Log4j2` rules apply. See [here](https://logging.apache.org/log4j/2
 which is nothing more than a copy of the `DefaultConfiguration`, which includes printing the MDC.
 
 ## Macro expansions
-> (walk/macroexpand-all '(sync.log/debug "Hi there" :a 1 :b 2))
+
+### Synchronous
 
 ```clj
+(walk/macroexpand-all '(sync.log/debug "Hi there" :a 1 :b 2))
+=>
 (flog.api.sync/log*
  (.
   (flog.builder/log-builder*
@@ -95,10 +98,11 @@ which is nothing more than a copy of the `DefaultConfiguration`, which includes 
  "Hi there"
  [:a 1 :b 2])
 ```
-
-> (walk/macroexpand-all '(async.log/debug "Hi there" :a 1 :b 2))
+### Asynchronous
 
 ```clj
+(walk/macroexpand-all '(async.log/debug "Hi there" :a 1 :b 2))
+=>
 (do
  (clojure.core/send-off
   clojure.tools.logging/*logging-agent*
