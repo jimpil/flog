@@ -1,5 +1,4 @@
 # jimpil/flog
-Logging that doesn't feel like flogging
 
 ## What
 
