@@ -1,4 +1,4 @@
-(defproject jimpil/flog "0.1.0-SNAPSHOT"
+(defproject jimpil/flog "0.1.4-SNAPSHOT"
   :description "FIXME: write description"
   :url "https://github.com/jimpil/flog"
   :license {:name "EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0"
@@ -8,7 +8,19 @@
                  [org.apache.logging.log4j/log4j-api  "2.14.1" :scope "provided"]
                  [org.clojure/tools.logging "1.1.0"]]
 
+  ;; sample property for including location-info
   :jvm-opts ["-Dflog.builder/include-location-info?=true"]
-
   :repl-options {:init-ns flog.demo}
+
+  :release-tasks [["vcs" "assert-committed"]
+                  ["change" "version" "leiningen.release/bump-version" "release"]
+                  ["vcs" "commit"]
+                  ["vcs" "tag" "--no-sign"]
+                  ["deploy" ]
+                  ["change" "version" "leiningen.release/bump-version"]
+                  ["vcs" "commit"]
+                  ;["vcs" "push"]
+                  ]
+  :deploy-repositories [["releases" :clojars]] ;; lein release :patch
+  :signing {:gpg-key "jimpil1985@gmail.com"}
   )
