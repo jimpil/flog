@@ -1,4 +1,4 @@
-(defproject jimpil/flog "0.1.4-SNAPSHOT"
+(defproject jimpil/flog "0.1.4"
   :description "Structured-logging facilities geared towards Clojure maps (backed by Log4j2)."
   :url "https://github.com/jimpil/flog"
   :license {:name "EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0"
