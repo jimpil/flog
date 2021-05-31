@@ -15,28 +15,26 @@
   ^Logger [^LoggerContext context ^String logger-ns]
   (.getLogger context logger-ns))
 
-(defn ns-logger* [ns]
+(defn ns-logger
+  ^Logger [ns]
   (-> (ctx/manager-context)
       (context-logger (str ns))))
 
 (defmacro location-info? []
-  `(or
-     (try
-       (some-> (System/getProperty "flog.builder/include-location-info?")
-               (Boolean/parseBoolean))
-       (catch Exception _#))
-     false))
+  `(-> "flog.builder/include-location-info?"
+       System/getProperty
+       Boolean/parseBoolean))
 
 (defmacro log-builder
   ([level]
    `(log-builder ~level ~(location-info?)))
   ([level location?]
    (if (true? location?)
-     `(-> (ns-logger* ~*ns*)
-          (at-level ~level)
+     `(-> (ns-logger ~*ns*)
+          (.atLevel ~level)
           (.withLocation))
-     `(-> (ns-logger* ~*ns*)
-          (at-level ~level)))))
+     `(-> (ns-logger ~*ns*)
+          (.atLevel ~level)))))
 
 (defmacro fatal [] `(log-builder Level/FATAL))
 (defmacro error [] `(log-builder Level/ERROR))
