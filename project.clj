@@ -1,5 +1,5 @@
 (defproject jimpil/flog "0.1.4-SNAPSHOT"
-  :description "FIXME: write description"
+  :description "Structured-logging facilities geared towards Clojure maps (backed by Log4j2)."
   :url "https://github.com/jimpil/flog"
   :license {:name "EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0"
             :url "https://www.eclipse.org/legal/epl-2.0/"}
