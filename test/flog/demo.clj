@@ -2,7 +2,8 @@
   (:require [flog.api.sync :as sync.log]
             [flog.api.async :as async.log]
             [flog.util :as util]
-            [flog.context :as ctx]))
+            [flog.context :as ctx]
+            [clojure.walk :as walk]))
 
 (util/set-level! :all)
 
@@ -27,6 +28,13 @@
 
   (sync.log/error  error :a 1 :b 2)
   (async.log/error error :a 1 :b 2)
+
+  (walk/macroexpand-all
+    '(sync.log/debug "Hi there" :a 1 :b 2))
+
+  (walk/macroexpand-all
+    '(async.log/debug "Hi there" :a 1 :b 2))
+
 
   )
 

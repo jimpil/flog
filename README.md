@@ -7,12 +7,12 @@ A very thin wrapper around [Log4j2](https://logging.apache.org/log4j/2.x/index.h
 optimised for logging Clojure maps (via [MapMessage](https://logging.apache.org/log4j/2.x/manual/messages.html)).
 
 ## Why
-Log4j2 is probably the only logging framework with such a strong emphasis on structured-logging.
-`clojure.tools.logging` does provide a layer of integration with it, but it has (traditionally) been geared
-towards logging Strings. It is virtually impossible, to send a MapMessage to `log4j2` via `clojure.tools.logging`,
-and have it be recognised as an actual MapMessage. That's because the bottom call to `.log` happens inside
-`clojure.tools.logging` (i.e. you don't control it, and therefore you can't type-hint it). This library completely
-sidesteps `clojure.tools.logging` - the only thing it uses from it is the `*logging-agent*`(in its async api).
+Log4j2 puts strong emphasis on structured-logging. `clojure.tools.logging` does provide a layer of integration with it, 
+but it has (traditionally) been geared towards logging Strings. It is virtually impossible, to send a MapMessage to 
+`log4j2` via `clojure.tools.logging`, and have it be recognised as an actual MapMessage. That's because the bottom call 
+to `.log` happens inside `clojure.tools.logging` (i.e. you don't control it, and therefore you can't type-hint it). 
+This library completely sidesteps `clojure.tools.logging` - the only thing it uses from it is the `*logging-agent*` 
+(in its async api).
 
 ## Where
 FIXME: add clojars badge
@@ -81,6 +81,59 @@ Care has been taken to carry the `ThreadContext`, and any thread-local bindings 
 The standard `Log4j2` rules apply. See [here](https://logging.apache.org/log4j/2.x/manual/configuration.html).
 `flog` comes with a very basic `log4j2.xml` (the last choice in the aforementioned rules),
 which is nothing more than a copy of the `DefaultConfiguration`, which includes printing the MDC.
+
+## Macro expansions
+> (walk/macroexpand-all '(sync.log/debug "Hi there" :a 1 :b 2))
+
+```clj
+(flog.api.sync/log*
+ (.
+  (flog.builder/log-builder*
+   (flog.builder/context-logger (flog.context/manager-context) "flog.demo")
+   org.apache.logging.log4j.Level/DEBUG)
+  withLocation)
+ "Hi there"
+ [:a 1 :b 2])
+```
+
+> (walk/macroexpand-all '(async.log/debug "Hi there" :a 1 :b 2))
+
+```clj
+(do
+ (clojure.core/send-off
+  clojure.tools.logging/*logging-agent*
+  (let*
+   [kvs__192__auto__
+    (. org.apache.logging.log4j.ThreadContext getImmutableContext)
+    vs__193__auto__
+    (. (. org.apache.logging.log4j.ThreadContext getImmutableStack) asList)]
+   (clojure.core/bound-fn*
+    (fn*
+     ([___194__auto__]
+      (let*
+       [___181__auto__ (. org.apache.logging.log4j.CloseableThreadContext putAll kvs__192__auto__)]
+       (try
+        (do
+         (let*
+          [___175__auto__ (. org.apache.logging.log4j.CloseableThreadContext pushAll vs__193__auto__)]
+          (try
+           (do
+            ;; synchronous call omitted as it can be seen above
+            )
+           (finally (. ___175__auto__ clojure.core/close)))))
+        (finally (. ___181__auto__ clojure.core/close)))))
+     ([]
+     ;; 0-arg arity (for submitting to Executor) omitted as it's identical
+     )
+  nil)
+```
+
+## Async options
+If you want async-logging you have 3 options:
+
+1. Use `flog.api.async`, which sends off on an agent - (easy)
+2. Use an async api of your own which submits to some ExecutorService that you control - (trivial) 
+3. Let log4j do the [work](https://logging.apache.org/log4j/2.x/manual/async.html) - (requires extra config/deps)
 
 ## Requirements
 `flog` expects the following two JARs on the classpath (preferably version 2.14.1, or higher):
