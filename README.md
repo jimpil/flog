@@ -14,7 +14,8 @@ This library completely sidesteps `clojure.tools.logging` - the only thing it us
 (in its async api).
 
 ## Where
-FIXME: add clojars badge
+
+[![Clojars Project](https://clojars.org/com.github.jimpil/flog/latest-version.svg)](https://clojars.org/com.github.jimpil/flog)
 
 ## How
 There are two identical api-variants (`sync` VS `async`) to choose from. The async variant uses the sync one,
