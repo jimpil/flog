@@ -1,6 +1,6 @@
 (ns flog.data
    (:require [flog.util :as util])
-   (:import (org.apache.logging.log4j LogBuilder)
+   (:import (org.apache.logging.log4j LogBuilder MarkerManager Marker)
             (org.apache.logging.log4j.message MapMessage)
             (java.util Map)
             (clojure.lang IPersistentMap)))
@@ -13,10 +13,12 @@
    IPersistentMap
    (log*
      ([this ^LogBuilder builder]
-      (let [^Map m (util/map-keys util/name++ this)]
-        (->> (MapMessage. m)
+      (let [^Marker marker      (some-> (:log/marker this) (MarkerManager/getMarker))
+            ^LogBuilder builder (cond-> builder (some? marker) (.withMarker marker))
+            ^Map this           (util/map-keys util/name++ (dissoc this :log/marker))]
+        (->> (MapMessage. this)
              (.log builder))))
-     ([this ^LogBuilder builder args]
+     ([this builder args]
       (-> this
           (assoc :log/args args)
           (log* builder))))

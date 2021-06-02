@@ -13,7 +13,7 @@
 (comment
   ;; the only difference between each pair should be the thread name
 
-  (sync.log/info  "Hi there" :a 1 :b 2)
+  (sync.log/info  "Hi there" :a 1 :b 2 :log/marker "foo")
   (async.log/info "Hi there" :a 1 :b 2)
 
   (ctx/with-mdc {"account-id" "foo"}
