@@ -11,12 +11,12 @@
    making sure it doesn't lose the context."
   ([builder thing]
    `(do (->> (sync/log* ~builder ~thing)
-             (ctx/inherit-fn)
+             (ctx/agent-inherit-fn)
              (send-off ctl/*logging-agent*))
         nil))
   ([builder thing varargs]
    `(do (->> (sync/log* ~builder ~thing ~varargs)
-             (ctx/inherit-fn)
+             (ctx/agent-inherit-fn)
              (send-off ctl/*logging-agent*))
         nil)))
 

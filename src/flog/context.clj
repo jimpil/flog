@@ -32,18 +32,24 @@
 
 ;; There should be no need to manually use this for regular logging
 ;; only when when sending/submitting to thread pools
-(defmacro inherit-fn
-  "A way to force ThreadContext inheritance onto worker threads.
-   Returns the function to send/submit. It can take 0 or 1
-   argument (purely for agent send-ability)."
+(defmacro agent-inherit-fn
+  "A way to force ThreadContext inheritance onto worker threads
+   within Clojure - i.e. Agents.  Returns the function to send (1-arg).
+   "
   [& body]
   `(let [kvs# (ThreadContext/getImmutableContext)
          vs#  (.asList (ThreadContext/getImmutableStack))]
-     (bound-fn
-       ([_#] ;; 1-arg arity for sending to agent
-        (with-context kvs# vs# ~@body))
-       ([] ;; 0-arg arity for submitting to ExecutorService
-        (with-context kvs# vs# ~@body)))))
+     (fn [_#] ;; no need for `bound-fn` here
+       (with-context kvs# vs# ~@body))))
+
+(defmacro executor-inherit-fn
+  "A way to force ThreadContext inheritance onto worker threads
+   outside of clojure - i.e. Executors. Returns the function to submit (no-args)."
+  [& body]
+  `(let [kvs# (ThreadContext/getImmutableContext)
+         vs#  (.asList (ThreadContext/getImmutableStack))]
+     (bound-fn []
+       (with-context kvs# vs# ~@body))))
 
 (defn ^LoggerContext manager-context
   ([]
