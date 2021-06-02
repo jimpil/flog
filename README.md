@@ -111,25 +111,21 @@ which is nothing more than a copy of the `DefaultConfiguration`, which includes 
     (. org.apache.logging.log4j.ThreadContext getImmutableContext)
     vs__193__auto__
     (. (. org.apache.logging.log4j.ThreadContext getImmutableStack) asList)]
-   (clojure.core/bound-fn*
-    (fn*
-     ([___194__auto__]
-      (let*
-       [___181__auto__ (. org.apache.logging.log4j.CloseableThreadContext putAll kvs__192__auto__)]
-       (try
-        (do
-         (let*
-          [___175__auto__ (. org.apache.logging.log4j.CloseableThreadContext pushAll vs__193__auto__)]
-          (try
-           (do
-            ;; synchronous call omitted as it can be seen above
-            )
-           (finally (. ___175__auto__ clojure.core/close)))))
-        (finally (. ___181__auto__ clojure.core/close)))))
-     ([]
-     ;; 0-arg arity (for submitting to Executor) omitted as it's identical
-     )
-  nil)
+   (fn*
+    ([___194__auto__]
+     (let*
+      [___181__auto__ (. org.apache.logging.log4j.CloseableThreadContext putAll kvs__192__auto__)]
+      (try
+       (do
+        (let*
+         [___175__auto__ (. org.apache.logging.log4j.CloseableThreadContext pushAll vs__193__auto__)]
+         (try
+          (do
+           ;; synchronous call omitted as it can be seen above
+           )
+          (finally (. ___175__auto__ clojure.core/close)))))
+       (finally (. ___181__auto__ clojure.core/close))))))))
+ nil)
 ```
 
 ## Async options
