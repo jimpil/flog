@@ -20,14 +20,24 @@
     (sync.log/info  "Hi there" :a 1 :b 2)
     (async.log/info "Hi there" :a 1 :b 2))
 
+  ;; plain error
   (sync.log/error  error)
   (async.log/error error)
-
+  ;; error followed by String
   (sync.log/error  error "Aborting...")
   (async.log/error error "Aborting...")
-
+  ;; error followed by key-vals
   (sync.log/error  error :a 1 :b 2)
   (async.log/error error :a 1 :b 2)
+  ;; error followed by String followed by key-vals
+  (sync.log/error  error "Aborting..." :a 1 :b 2)
+  (async.log/error error "Aborting..." :a 1 :b 2)
+  ;; error followed by String followed by map
+  (sync.log/error  error "Aborting..." {:a 1 :b 2})
+  (async.log/error error "Aborting..." {:a 1 :b 2})
+  ;; error followed by map
+  (sync.log/error  error {:a 1 :b 2})
+  (async.log/error error {:a 1 :b 2})
 
   (walk/macroexpand-all
     '(sync.log/debug "Hi there" :a 1 :b 2))

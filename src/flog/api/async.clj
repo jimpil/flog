@@ -1,8 +1,8 @@
 (ns flog.api.async
   (:require [clojure.tools.logging :as ctl]
-            [flog.api.sync :as sync]
             [flog.builder :as builder]
-            [flog.context :as ctx]))
+            [flog.context :as ctx]
+            [flog.data :as data]))
 
 (defmacro log*
   "Entry point for asynchronous logging.
@@ -10,12 +10,12 @@
    to `clojure.tools.logging/*logging-agent*`,
    making sure it doesn't lose the context."
   ([builder thing]
-   `(do (->> (sync/log* ~builder ~thing)
+   `(do (->> (data/log* ~thing ~builder)
              (ctx/agent-inherit-fn)
              (send-off ctl/*logging-agent*))
         nil))
   ([builder thing varargs]
-   `(do (->> (sync/log* ~builder ~thing ~varargs)
+   `(do (->> (data/log* ~thing ~builder ~varargs)
              (ctx/agent-inherit-fn)
              (send-off ctl/*logging-agent*))
         nil)))

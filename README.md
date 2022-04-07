@@ -18,8 +18,8 @@ This library completely sidesteps `clojure.tools.logging` - the only thing it us
 [![Clojars Project](https://clojars.org/com.github.jimpil/flog/latest-version.svg)](https://clojars.org/com.github.jimpil/flog)
 
 ## How
-There are two identical api-variants (`sync` VS `async`) to choose from. The async variant uses the sync one,
-but has it dispatched on `clojure.tools.logging/*logging-agent*`(making sure it doesn't lose the context along the way).
+There are two identical api-variants (`sync` VS `async`) to choose from. The async variant uses the same function as sync one,
+but dispatches it on `clojure.tools.logging/*logging-agent*`(making sure it doesn't lose the context along the way).
 
 ```clj
 ;; pick one
@@ -42,9 +42,8 @@ or a map more conveniently like so:
 (l/info "I am a log-message" :foo 1 :bar 2) ;; will emit the same `MapMessage` as above
 ```
 
-All level-specific calls can also take a Throwable as the first arg. However, following it, you must either provide a map,
-a String, or an even number of args (which will become a map). You can also provide just the `Throwable`, in which case
-the following map will be logged:
+All level-specific calls can also take a Throwable as the first arg in which case the following map will be merged 
+into the rest of the provided args:
 
 ```clj
 {:error/message (ex-message throwable)
@@ -89,13 +88,13 @@ which is nothing more than a copy of the `DefaultConfiguration`, which includes 
 ```clj
 (walk/macroexpand-all '(sync.log/debug "Hi there" :a 1 :b 2))
 =>
-(flog.api.sync/log*
+(flog.data/log* "Hi there"
  (.
-  (flog.builder/log-builder*
-   (flog.builder/context-logger (flog.context/manager-context) "flog.demo")
+  (.
+   (flog.builder/ns-logger #object[clojure.lang.Namespace 0x49575f89 "flog.demo"])
+   atLevel
    org.apache.logging.log4j.Level/DEBUG)
   withLocation)
- "Hi there"
  [:a 1 :b 2])
 ```
 ### Asynchronous
@@ -122,7 +121,6 @@ which is nothing more than a copy of the `DefaultConfiguration`, which includes 
          (try
           (do
            ;; synchronous call omitted as it can be seen above
-           )
           (finally (. ___175__auto__ clojure.core/close)))))
        (finally (. ___181__auto__ clojure.core/close))))))))
  nil)
@@ -136,7 +134,7 @@ If you want async-logging you have 3 options:
 3. Let log4j do the [work](https://logging.apache.org/log4j/2.x/manual/async.html) - (requires extra config/deps)
 
 ## Requirements
-`flog` expects the following two JARs on the classpath (preferably version 2.14.1, or higher):
+`flog` expects the following two JARs on the classpath (preferably version 2.17.2, or higher):
 - org.apache.logging.log4j/log4j-core
 - org.apache.logging.log4j/log4j-api
 
