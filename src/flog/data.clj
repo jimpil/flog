@@ -23,7 +23,7 @@
      ([this ^LogBuilder builder]
       (let [^Marker marker      (some-> (:log/marker this) (MarkerManager/getMarker))
             ^LogBuilder builder (cond-> builder (some? marker) (.withMarker marker))
-            ^Map this           (util/map-keys util/name++ (dissoc this :log/marker))]
+            ^Map this           (update-keys (dissoc this :log/marker) util/name++)]
         (->> (MapMessage. this)
              (.log builder))))
      ([this builder args]

@@ -2,7 +2,20 @@
   (:require [clojure.tools.logging :as ctl]
             [flog.builder :as builder]
             [flog.context :as ctx]
-            [flog.data :as data]))
+            [flog.data :as data])
+  (:import (clojure.lang Agent)))
+
+(def exec
+  "The underlying executor to use (lazy-loaded). If the runtime supports
+   virtual-threads (java 19+), returns a `newThreadPerTaskExecutor` (per `flog.exec/virtual`).
+   Otherwise, returns the (standard) `Agent/soloExecutor`."
+  (delay
+    (if (-> (System/getProperty "java.version")
+            (subs 0 2)
+            Long/parseLong
+            (>= 19))
+      @(requiring-resolve 'flog.exec/virtual)
+      Agent/soloExecutor)))
 
 (defmacro log*
   "Entry point for asynchronous logging.
@@ -12,12 +25,12 @@
   ([builder thing]
    `(do (->> (data/log* ~thing ~builder)
              (ctx/agent-inherit-fn)
-             (send-off ctl/*logging-agent*))
+             (send-via @exec ctl/*logging-agent*))
         nil))
   ([builder thing varargs]
    `(do (->> (data/log* ~thing ~builder ~varargs)
              (ctx/agent-inherit-fn)
-             (send-off ctl/*logging-agent*))
+             (send-via @exec ctl/*logging-agent*))
         nil)))
 
 (defmacro fatal

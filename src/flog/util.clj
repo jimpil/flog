@@ -2,15 +2,6 @@
   (:require [flog.context :as ctx])
   (:import (org.apache.logging.log4j Level LogManager)))
 
-(defn map-keys
-  "Transforms the keys of map <m>,
-   passing each one through the provided function."
-  [f m]
-  (persistent!
-    (reduce-kv
-      #(assoc! %1 (f %2) %3)
-      (transient {}) m)))
-
 (defn name++
   "Like `clojure.core/name`, but takes into account the namespace."
   [x]
