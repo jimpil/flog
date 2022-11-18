@@ -7,8 +7,8 @@
 
 (def exec
   "The underlying executor to use (lazy-loaded). If the runtime supports
-   virtual-threads (java 19+), returns a `newThreadPerTaskExecutor` (per `flog.exec/virtual`).
-   Otherwise, returns the (standard) `Agent/soloExecutor`."
+   virtual-threads (java 19+), returns a `newThreadPerTaskExecutor`).
+   Otherwise, returns the (usual) `Agent/soloExecutor`."
   (delay
     (try
       (eval
@@ -17,7 +17,7 @@
              .factory
              java.util.concurrent.Executors/newThreadPerTaskExecutor))
       (catch Exception _
-        ;; fallback
+        ;; fallback to what we've always used
         Agent/soloExecutor))))
 
 (defmacro log*
