@@ -10,12 +10,15 @@
    virtual-threads (java 19+), returns a `newThreadPerTaskExecutor` (per `flog.exec/virtual`).
    Otherwise, returns the (standard) `Agent/soloExecutor`."
   (delay
-    (if (-> (System/getProperty "java.version")
-            (subs 0 2)
-            Long/parseLong
-            (>= 19))
-      @(requiring-resolve 'flog.exec/virtual)
-      Agent/soloExecutor)))
+    (try
+      (eval
+        `(-> (Thread/ofVirtual)
+             (.name "flog-" 0)
+             .factory
+             java.util.concurrent.Executors/newThreadPerTaskExecutor))
+      (catch Exception _
+        ;; fallback
+        Agent/soloExecutor))))
 
 (defmacro log*
   "Entry point for asynchronous logging.

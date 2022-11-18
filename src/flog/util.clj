@@ -15,7 +15,8 @@
   "Sets the specified <level> (keyword) on the logger
    named <logger-name> (String). The 1-arg arity uses
    the root logger (per `LogManager/ROOT_LOGGER_NAME`),
-   which happens to be the empty string."
+   which happens to be the empty string. For all levels
+   use `:all`."
   ([level]
    (set-level! LogManager/ROOT_LOGGER_NAME level))
   ([logger-name level]

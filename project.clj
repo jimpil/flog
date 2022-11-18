@@ -9,7 +9,7 @@
                  [org.clojure/tools.logging "1.2.4"]]
 
   ;; sample property for including location-info
-  :jvm-opts ["-Dflog.builder/include-location-info?=true"]
+  :jvm-opts ["-Dflog.builder/include-location-info?=true" "--enable-preview"]
   :repl-options {:init-ns flog.demo}
 
   :release-tasks [["vcs" "assert-committed"]
