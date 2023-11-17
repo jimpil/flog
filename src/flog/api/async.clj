@@ -16,8 +16,8 @@
              (.name "flog-" 0)
              .factory
              java.util.concurrent.Executors/newThreadPerTaskExecutor))
-      (catch Exception _
-        ;; fallback to what we've always used
+      (catch Throwable _
+        ;; fallback to what we've always used (i.e. per `send-off`)
         Agent/soloExecutor))))
 
 (defmacro log*

@@ -11,6 +11,13 @@
       (str ns-x \/ (name x))
       (name x))))
 
+(defn pr-map-fully
+  ^String [m]
+  (binding [*print-length* nil
+            *print-level*  nil
+            *print-meta*   nil]
+    (pr-str m)))
+
 (defn set-level!
   "Sets the specified <level> (keyword) on the logger
    named <logger-name> (String). The 1-arg arity uses

@@ -7,8 +7,11 @@
 
 (util/set-level! :all)
 
-(defonce error
-  (IllegalStateException. "Internal error"))
+(def error
+  (ex-info
+    "Request failed!"
+    {:reason "connection timeout"}
+    (IllegalStateException. "Internal error")))
 
 (comment
   ;; the only difference between each pair should be the thread name
@@ -17,7 +20,7 @@
   (async.log/info "Hi there" :a 1 :b 2)
 
   (sync.log/info  "Hi there" {:a 1 :b 2 :log/marker "foo"})
-  (async.log/info "Hi there" {:a 1 :b 2})
+  (async.log/info "Hi there" {:a 1 :b 2 :log/marker "foo"})
 
   (ctx/with-mdc {"account-id" "foo"}
     (sync.log/info  "Hi there" :a 1 :b 2)
@@ -33,7 +36,7 @@
   (sync.log/error  error :a 1 :b 2)
   (async.log/error error :a 1 :b 2)
   ;; error followed by String followed by key-vals
-  (sync.log/error  error "Aborting..." :a 1 :b 2)
+  (sync.log/error  error "Aborting..." :a 1 :b 2 :log/marker "foo")
   (async.log/error error "Aborting..." :a 1 :b 2)
   ;; error followed by String followed by map
   (sync.log/error  error "Aborting..." {:a 1 :b 2})

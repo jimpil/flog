@@ -5,6 +5,8 @@
 A very thin wrapper around [Log4j2](https://logging.apache.org/log4j/2.x/index.html),
 optimised for logging Clojure maps (via [MapMessage](https://logging.apache.org/log4j/2.x/manual/messages.html)).
 
+Should support the upcoming log4j-3 release, but only versions starting from `0.3.0` have actually been tested against it. 
+
 ## Why
 Log4j2 puts strong emphasis on structured-logging. `clojure.tools.logging` does provide a layer of integration with it, 
 but it has (traditionally) been geared towards logging Strings. It is virtually impossible, to send a MapMessage to 
