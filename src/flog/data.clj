@@ -13,16 +13,6 @@
    :error/cause   (ex-cause throwable)
    :error/class   (.getName (class throwable))})
 
-(defmacro supply-map-lazily
-  [& body] ;; body MUST return Map when eval-ed
-  `(reify
-     org.apache.logging.log4j.util.Supplier
-     (get [~'_]
-       (MapMessage. ^java.util.Map (do ~@body)))
-     ;java.util.function.Supplier
-     ;(get [~'_] (MapMessage. ^java.util.Map (do ~@body)))
-     ))
-
  (defprotocol ILogData
    (log* [this builder]
          [this builder args]))
@@ -36,10 +26,12 @@
      ([this ^LogBuilder builder]
       (let [^Marker marker      (some-> (:log/marker this) (MarkerManager/getMarker))
             ^LogBuilder builder (cond-> builder (some? marker) (.withMarker marker))
-            ^Supplier supplier  (supply-map-lazily
-                                  (-> this
-                                      (dissoc :log/marker)
-                                      (update-keys util/name++)))]
+            ^Supplier supplier  (reify org.apache.logging.log4j.util.Supplier
+                                  (get [_]
+                                    (let [^java.util.Map m (-> this
+                                                               (dissoc :log/marker)
+                                                               (update-keys util/name++))]
+                                      (MapMessage. m))))]
         (log* supplier builder))) ;; delegate to Supplier impl
      ([this builder args]
       (-> this
