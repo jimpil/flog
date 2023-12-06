@@ -30,26 +30,40 @@
       `(with-mdc ~mdc ~@body)
       `(with-mdc ~mdc (with-ndc ~ndc ~@body)))))
 
+(defn inherit-fn
+  "Wraps <f> so that the current thread's context is inherited before calling it.
+   The assumption is that <f> will run on a different thread, but will want access
+   to the current context."
+  [f]
+  (let [ks (ThreadContext/getImmutableContext)
+        vs (.asList (ThreadContext/getImmutableStack))]
+    (fn ;; optimise up to 3 args
+      ([]
+       (with-context ks vs (f)))
+      ([a]
+       (with-context ks vs (f a)))
+      ([a b]
+       (with-context ks vs (f a b)))
+      ([a b c]
+       (with-context ks vs (f a b c)))
+      ([a b c d & more]
+       (with-context ks vs (apply f a b c d more))))
+    )
+  )
+
 ;; There should be no need to manually use this for regular logging
-;; only when when sending/submitting to thread pools
+;; only when sending/submitting to thread pools
 (defmacro agent-inherit-fn
   "A way to force ThreadContext inheritance onto worker threads
-   within Clojure - i.e. Agents.  Returns the function to send (1-arg).
-   "
+   within Clojure - i.e. Agents. Returns the function to send (1-arg)."
   [& body]
-  `(let [kvs# (ThreadContext/getImmutableContext)
-         vs#  (.asList (ThreadContext/getImmutableStack))]
-     (fn [_#] ;; no need for `bound-fn` here
-       (with-context kvs# vs# ~@body))))
+  `(inherit-fn (fn [_#] ~@body)))
 
 (defmacro executor-inherit-fn
   "A way to force ThreadContext inheritance onto worker threads
-   outside of clojure - i.e. Executors. Returns the function to submit (no-args)."
+   outside clojure - i.e. Executors. Returns the function to submit (no-args)."
   [& body]
-  `(let [kvs# (ThreadContext/getImmutableContext)
-         vs#  (.asList (ThreadContext/getImmutableStack))]
-     (bound-fn []
-       (with-context kvs# vs# ~@body))))
+  `(inherit-fn (bound-fn [] ~@body)))
 
 (defn ^LoggerContext manager-context
   ([]

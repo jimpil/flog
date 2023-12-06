@@ -16,9 +16,9 @@
   (.getLogger context logger-ns))
 
 (defn ns-logger
-  ^Logger [ns]
+  ^Logger [^String ns-name]
   (-> (ctx/manager-context)
-      (context-logger (str ns))))
+      (context-logger ns-name)))
 
 (defmacro location-info? []
   `(-> "flog.builder/include-location-info?"
@@ -30,10 +30,10 @@
    `(log-builder ~level ~(location-info?)))
   ([level location?]
    (if (true? location?)
-     `(-> (ns-logger ~*ns*)
+     `(-> (ns-logger ~(str *ns*))
           (.atLevel ~level)
           (.withLocation))
-     `(-> (ns-logger ~*ns*)
+     `(-> (ns-logger ~(str *ns*))
           (.atLevel ~level)))))
 
 (defmacro fatal [] `(log-builder Level/FATAL))
