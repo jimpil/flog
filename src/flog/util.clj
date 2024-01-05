@@ -1,10 +1,10 @@
 (ns flog.util
-  (:require [flog.context :as ctx])
-  (:import (org.apache.logging.log4j Level LogManager)))
+  (:import (org.apache.logging.log4j Level LogManager)
+           (org.apache.logging.log4j.core.config Configurator)))
 
 (defn name++
   "Like `clojure.core/name`, but takes into account the namespace."
-  [x]
+  ^String [x]
   (if (string? x)
     x
     (if-some [ns-x (namespace x)]
@@ -19,17 +19,29 @@
     (pr-str m)))
 
 (defn set-level!
-  "Sets the specified <level> (keyword) on the logger
-   named <logger-name> (String). The 1-arg arity uses
+  "Sets the specified <level> (keyword) on the <logger> (String). The 1-arg arity uses
    the root logger (per `LogManager/ROOT_LOGGER_NAME`),
    which happens to be the empty string. For all levels
    use `:all`."
   ([level]
    (set-level! LogManager/ROOT_LOGGER_NAME level))
-  ([logger-name level]
-   (let [ctx (ctx/manager-context)]
-     (-> ctx
-         (.getConfiguration)
-         (.getLoggerConfig (str logger-name))
-         (.setLevel (Level/valueOf (name level))))
-     (.updateLoggers ctx))))
+  ([logger level]
+   (let [level (Level/valueOf (name level))]
+     (cond
+       (= :all logger)
+       (Configurator/setAllLevels LogManager/ROOT_LOGGER_NAME level)
+
+       (string? logger)
+       (Configurator/setLevel ^String logger level)
+
+       (or (sequential? logger)
+           (set? logger))
+       (Configurator/setLevel (zipmap logger (repeat level)))
+
+       (map? logger)
+       (Configurator/setLevel logger)
+
+       :else
+       (throw
+         (IllegalArgumentException.
+           (str "Unsupported logger type: " (type logger))))))))
