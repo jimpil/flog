@@ -48,5 +48,5 @@
   ([level]
    (set-all-levels! LogManager/ROOT_LOGGER_NAME level))
   ([parent-logger level]
-   (->> (Level/valueOf level)
+   (->> (Level/valueOf (name level))
         (Configurator/setAllLevels parent-logger))))
