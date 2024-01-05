@@ -19,17 +19,17 @@
     (pr-str m)))
 
 (defn set-level!
-  "Sets the specified <level> (keyword) on the <logger> (String).
-   The 1-arg arity uses the :root logger (per `LogManager/ROOT_LOGGER_NAME`),
-   which happens to be the empty string. For all levels use `:all`."
-  ([level]
-   (set-level! :root level))
+  "Wrapper around `Configurator.setLevel()`. <logger> can be String/sequential/set.
+   The 1-arg arity can be used to either pass a map (logger => level),
+   or a normal level keyword, in which case the :root logger (per `LogManager/ROOT_LOGGER_NAME`),
+   will be used. For `Level/ALL` levels use `:all`."
+  ([loggers-or-level]
+   (if (map? loggers-or-level)
+     (Configurator/setLevel (update-vals loggers-or-level #(Level/valueOf (name %))))
+     (set-level! LogManager/ROOT_LOGGER_NAME loggers-or-level)))
   ([logger level]
    (let [level (Level/valueOf (name level))]
      (cond
-       (= :root logger)
-       (Configurator/setAllLevels LogManager/ROOT_LOGGER_NAME level)
-
        (string? logger)
        (Configurator/setLevel ^String logger level)
 
@@ -40,10 +40,13 @@
        :else
        (throw
          (IllegalArgumentException.
-           (str "Unsupported logger type: " (type logger))))))))
+           (str "Unsupported <logger> type: " (type logger))))))))
 
-(defn set-levels!
-  "Similar to `set-level!`, but expects a map of logger-name => level"
-  [loggers]
-  {:pre [(map? loggers)]}
-  (Configurator/setLevel (update-vals loggers #(Level/valueOf (name %)))))
+(defn set-all-levels!
+  "Wrapper around `Configurator.setAllLevels()`. <parent-logger> should be a String
+   - defaults to `LogManager/ROOT_LOGGER_NAME` in the 1-arg arity."
+  ([level]
+   (set-all-levels! LogManager/ROOT_LOGGER_NAME level))
+  ([parent-logger level]
+   (->> (Level/valueOf level)
+        (Configurator/setAllLevels parent-logger))))
