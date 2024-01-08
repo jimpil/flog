@@ -32,8 +32,8 @@
    will be used. For `Level/ALL` levels use `:all`."
   ([loggers-or-level]
    (if (map? loggers-or-level)
-     (let [ctx   (ctx/manager-context)
-           cfg   (.getConfiguration ctx)]
+     (let [ctx (ctx/manager-context)
+           cfg (.getConfiguration ctx)]
        (run!
          (fn [[logger level]]
            (->> (name level)
