@@ -5,7 +5,7 @@
             [flog.context :as ctx]
             [clojure.walk :as walk]))
 
-(util/set-level! :all)
+(util/set-level! "flog.demo" :info)
 
 (def error
   (ex-info
